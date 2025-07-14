@@ -1,0 +1,65 @@
+{
+  "presentation_title": "Sovereign PD Modeling Framework: Comprehensive Estimation Methodology",
+  "slides": [
+    {
+      "template": "COVER_1",
+      "title": "Sovereign Probability of Default Modeling Framework",
+      "subtitle": "Comprehensive Estimation Methodology Using Optimal Variable Selection",
+      "author": "Moody's Analytics Credit Analytics Team",
+      "date": "December 2024"
+    },
+    {
+      "template": "AGENDA_1", 
+      "title": "Agenda",
+      "agenda_items": [
+        "Framework Overview: Data to Forecast Process",
+        "Macroeconomic Variables & Transformations",
+        "OVS Rules & Economic Constraints",
+        "Advanced OVS Filtering Process",
+        "USA Case Study: Scenario Forecasting",
+        "Canada Case Study: Performance Analysis",
+        "Next Steps & Future Enhancements"
+      ]
+    },
+    {
+      "template": "CONTENT_1",
+      "title": "Framework Overview: Data Preparation to Scenario Forecast",
+      "content": "The sovereign PD modeling framework employs a systematic approach from raw data to scenario forecasts. The process integrates multiple data sources and applies rigorous statistical methodology to produce reliable sovereign risk assessments.\n\n**Data Preparation Phase:**\n• Sovereign PD data from CMA/Credit Edge covering 60 countries\n• Macroeconomic variables from multiple sources with quarterly frequency\n• Data cleaning and alignment across time series\n• Missing value treatment and outlier detection\n\n**Transformation Phase:**\n• Variable-specific transformations based on economic theory\n• Standardization for cross-country comparability\n• Lag structure implementation for dynamic modeling\n\n**Model Selection Phase:**\n• Optimal Variable Selection (OVS) with exhaustive search\n• Economic constraint enforcement\n• Statistical filtering and validation\n\n**Forecasting Phase:**\n• Multi-scenario forecast generation (Baseline, S1, S3, S4)\n• Historical backtesting for model validation\n• Performance metrics calculation and diagnostics"
+    },
+    {
+      "template": "CONTENT_1",
+      "title": "Macroeconomic Variables & Transformations",
+      "content": "The framework incorporates 13 key macroeconomic indicators with theory-driven transformations. Each variable undergoes specific processing to capture economic relationships and ensure model stability.\n\n**Variables Using Log Return Transformation:**\n• Commodity Index - captures price volatility cycles\n• Debt to GDP - ensures stationarity for fiscal ratios\n• Equity Index - captures market risk dynamics\n• Exchange Rate (FX) - reflects currency depreciation risk\n• GDP - captures economic growth momentum\n• Government Consumption - tracks fiscal policy changes\n• Inflation Rate - monetary policy transmission mechanism\n• Oil Price - commodity price shock impact\n• Unemployment Rate - labor market conditions\n\n**Variables Using Difference Transformation:**\n• Government 10Y Bond Rate - interest rate level changes\n• Monetary Policy Rate - central bank policy adjustments\n• Net Exports - trade balance fluctuations\n• Term Spread - yield curve slope changes\n\n**Transformation Benefits:**\n• Ensures stationarity for time series modeling\n• Captures economic theory-consistent relationships\n• Standardizes variables for cross-country analysis"
+    },
+    {
+      "template": "CONTENT_1",
+      "title": "OVS Rules & Economic Constraints",
+      "content": "The Optimal Variable Selection process employs comprehensive rules to ensure economically meaningful and statistically robust models. These constraints balance theoretical expectations with empirical evidence.\n\n**Economic Sign Constraints:**\n• Positive Impact Variables:\n  - Debt to GDP ratio (higher debt increases default risk)\n  - Unemployment rate (economic weakness signal)\n• Negative Impact Variables:\n  - Commodity prices (resource revenue protection)\n  - Equity index (market confidence indicator)\n  - GDP growth (economic strength measure)\n  - Oil prices (commodity exporters benefit)\n• Flexible Variables:\n  - Exchange rates and interest rates (context-dependent)\n\n**Statistical Filters:**\n• Maximum correlation threshold: 0.8 (multicollinearity control)\n• P-value significance: ≤ 0.15 (statistical relevance)\n• Variable significance testing with coefficient stability\n\n**Model Architecture Rules:**\n• Maximum 4 macroeconomic variables per model\n• Lag structure: 0 to 4 quarters for dynamic relationships\n• Single-use constraint: one transformation per base variable\n• Required fixed variables: lagged dependent variable for mean reversion"
+    },
+    {
+      "template": "CONTENT_1",
+      "title": "Advanced OVS Filtering: Before & After Comparison",
+      "content": "The advanced filtering process enhances model quality by removing conflicting variables and improving economic interpretability. This step ensures robust model specifications across all countries.\n\n**Basic OVS Results:**\n• Total models generated: 590 combinations\n• Countries successfully modeled: 60 target countries\n• Variable conflicts: Multiple transformations of same base variable\n• Sign violations: Some models with theoretically inconsistent coefficients\n\n**Advanced Filtering Improvements:**\n• Conflict resolution: Single transformation per base variable enforced\n• Sign constraint tightening: Stricter adherence to economic theory\n• Cross-variable correlation: Enhanced multicollinearity detection\n• Model stability: Improved coefficient consistency across specifications\n\n**Final Advanced Results:**\n• Refined model count: 515 high-quality combinations\n• Model reduction: 12.7% decrease in total models\n• Quality improvement: Enhanced economic interpretability\n• Country coverage: Maintained 60 countries with improved specifications\n\n**Key Benefits:**\n• Reduced model complexity while maintaining explanatory power\n• Enhanced economic intuition in coefficient signs\n• Improved model stability and forecasting reliability\n• Better alignment with sovereign risk theory"
+    },
+    {
+      "template": "FIGURE_1",
+      "title": "USA Case Study: Scenario Forecasting Analysis",
+      "content": "The USA demonstrates strong model performance with robust scenario differentiation. The framework captures sovereign risk dynamics effectively across different economic conditions.\n\n**Model Performance Metrics:**\n• Historical forecast accuracy: 15.3% MAPE\n• Correlation with actual PD: 0.930 (excellent fit)\n• Model specification: Advanced filtering with lags\n• Key variables: Monetary policy rate, term spread, equity index\n\n**Scenario Forecast Results:**\n• Baseline scenario: Stable sovereign risk trajectory\n• S1 (Mild stress): Moderate PD elevation\n• S3 (Moderate stress): Significant risk increase\n• S4 (Severe stress): Substantial stress impact\n\n**Chart Reference:**\nScenario forecasts and macro variable dynamics are shown in:\n• scenario_forecast_USA_filtered_advanced_with_lags.png\n• macro_variables_USA_filtered_advanced_with_lags.png\n\n**Key Insights:**\n• Model effectively captures US sovereign risk sensitivity\n• Clear scenario differentiation demonstrates stress testing capability\n• Macro variables show realistic stress scenario evolution\n• Framework provides actionable risk assessment for portfolio management"
+    },
+    {
+      "template": "FIGURE_1", 
+      "title": "Canada Case Study: Model Performance & Dynamics",
+      "content": "Canada represents a developed market with moderate model performance, highlighting the framework's ability to handle different sovereign risk profiles and economic structures.\n\n**Model Performance Metrics:**\n• Historical forecast accuracy: 20.2% MAPE\n• Correlation with actual PD: 0.786 (good fit)\n• Model specification: Advanced filtering with lags\n• Key variables: Oil prices, exchange rate, government bond yield\n\n**Economic Characteristics:**\n• Commodity-dependent economy with oil price sensitivity\n• Stable fiscal position with low default risk\n• Exchange rate dynamics linked to commodity cycles\n• Interest rate sensitivity through government bond yields\n\n**Scenario Analysis:**\n• Baseline: Low sovereign risk reflecting stable fundamentals\n• Stress scenarios: Moderate sensitivity to global commodity shocks\n• Oil price impact: Clear transmission through exchange rate channel\n• Fiscal stability: Limited response to moderate economic stress\n\n**Chart Reference:**\nDetailed analysis available in:\n• scenario_forecast_CAN_filtered_advanced_with_lags.png\n• macro_variables_CAN_filtered_advanced_with_lags.png\n\n**Framework Validation:**\n• Captures commodity economy characteristics effectively\n• Demonstrates appropriate sensitivity to oil price shocks\n• Reflects Canada's stable sovereign risk profile"
+    },
+    {
+      "template": "CONTENT_1",
+      "title": "Next Steps & Future Enhancements",
+      "content": "The framework provides a solid foundation for sovereign risk modeling with clear pathways for continued improvement and expansion. Future development will focus on methodology refinement and benchmarking integration.\n\n**Immediate Priorities:**\n\n**Variable Selection Process Enhancement:**\n• Refine OVS algorithm with machine learning techniques\n• Implement dynamic variable selection based on economic regimes\n• Add cross-country information sharing through panel methods\n• Enhance lag structure optimization with information criteria\n\n**GCorr Integration for Benchmarking:**\n• Incorporate GCorr scenario forecast results as benchmark comparison\n• Develop in-sample regression analysis using GCorr outputs\n• Create model performance metrics relative to GCorr benchmarks\n• Establish validation framework using GCorr historical performance\n\n**Advanced Methodology Development:**\n• Time-varying parameter models for evolving relationships\n• Regime-switching models for crisis vs. normal periods\n• Non-linear modeling techniques for threshold effects\n• Uncertainty quantification with confidence intervals\n\n**Operational Improvements:**\n• Real-time data integration for nowcasting applications\n• Automated model monitoring and performance tracking\n• Enhanced visualization and reporting capabilities\n• Client-facing dashboard development for risk management teams"
+    },
+    {
+      "template": "BACK_COVER_1",
+      "title": "Thank You",
+      "content": "Questions & Discussion\n\nSovereign PD Modeling Framework\nCredit Analytics Team | Moody's Analytics"
+    }
+  ]
+} 

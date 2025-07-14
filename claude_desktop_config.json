@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "moodys-pptx": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://127.0.0.1:8000/mcp-server/mcp/", 
+        "--allow-http",
+        "--transport", "http-only" 
+      ]
+    }
+  }
+} 
