@@ -17,9 +17,12 @@ output_dir.mkdir(parents=True, exist_ok=True)
 plots_dir = output_dir / 'plots'
 plots_dir.mkdir(parents=True, exist_ok=True)
 
-# Create centralized comparison directory for advanced filtering no-lag charts
-comparison_plots_dir = output_dir / 'comparison_charts_advanced_no_lags'
-comparison_plots_dir.mkdir(parents=True, exist_ok=True)
+# Create centralized comparison directories for different lag options
+comparison_plots_dir_ignore_lags = output_dir / 'charts_ignore_lags'
+comparison_plots_dir_ignore_lags.mkdir(parents=True, exist_ok=True)
+
+comparison_plots_dir_has_no_lags = output_dir / 'charts_has_no_lags'
+comparison_plots_dir_has_no_lags.mkdir(parents=True, exist_ok=True)
 
 # Configuration
 DATA_PATH = 'Output/4.transformation/transformed_data.csv'
@@ -37,11 +40,12 @@ OVS_SOURCES = {
 }
 
 LAG_OPTIONS = {
-    'no_lags': 'ignore_mv_lags',      # Current implementation - ignore MV lags
+    # 'ignore_lags': 'ignore_mv_lags',      # Current implementation - ignore MV lags
+    'has_no_lags': 'filter_no_lags',  # New option - filter for models with has_no_lags == TRUE
     # 'with_lags': 'use_mv_lags'        # New option - use MV lags from OVS model
 }
 
-def get_top_model_for_country(country, ovs_source):
+def get_top_model_for_country(country, ovs_source, lag_option='ignore_lags'):
     """
     Helper function to get the top model for a country from OVS results.
     Returns the model row or None if not found.
@@ -53,14 +57,25 @@ def get_top_model_for_country(country, ovs_source):
         if ovs_source in ['original', 'original_gcorr40q', 'original_gcorr40q_smoothed']:
             # For original sources, get the top model by adj_r2
             country_models = ovs_data[ovs_data['country'] == country]
+            
+            # Apply has_no_lags filter if requested
+            if lag_option == 'has_no_lags' and 'has_no_lags' in ovs_data.columns:
+                country_models = country_models[country_models['has_no_lags'] == True]
+                
             if not country_models.empty:
                 return country_models.loc[country_models['adj_r2'].idxmax()]
         else:
-            # For filtered results, get rank 1 model
-            country_top_model = ovs_data[(ovs_data['country'] == country) & 
-                                        (ovs_data['rank_in_country'] == 1)]
-            if not country_top_model.empty:
-                return country_top_model.iloc[0]
+            # For filtered results, first filter by country
+            country_models = ovs_data[ovs_data['country'] == country]
+            
+            # Apply has_no_lags filter if requested
+            if lag_option == 'has_no_lags' and 'has_no_lags' in ovs_data.columns:
+                country_models = country_models[country_models['has_no_lags'] == True]
+            
+            # Get the best model (lowest rank) from the filtered set
+            if not country_models.empty:
+                best_model = country_models.loc[country_models['rank_in_country'].idxmin()]
+                return best_model
         
         return None
         
@@ -115,7 +130,7 @@ def get_macro_variables_for_plotting(country, ovs_source, lag_option):
     Helper function to get macro variable names for plotting.
     Returns list of variable names to plot (with or without lag suffixes).
     """
-    model_row = get_top_model_for_country(country, ovs_source)
+    model_row = get_top_model_for_country(country, ovs_source, lag_option)
     
     if model_row is None:
         return []
@@ -146,24 +161,24 @@ def get_model_description_for_plotting(country, ovs_source, lag_option):
     Helper function to create model description string for plot titles.
     Returns formatted string with variable names, lags, and coefficients.
     """
-    model_row = get_top_model_for_country(country, ovs_source)
+    model_row = get_top_model_for_country(country, ovs_source, lag_option)
     
     if model_row is None:
         return 'Model variables not available'
     
     clean_mv_names = []
     
-    # Add constant term if present
-    if 'constant_coefficient' in model_row and pd.notna(model_row['constant_coefficient']):
-        clean_mv_names.append(f"Const({model_row['constant_coefficient']:.3f})")
+    # Skip constant term - don't add it to model description
+    # if 'constant_coefficient' in model_row and pd.notna(model_row['constant_coefficient']):
+    #     clean_mv_names.append(f"Const({model_row['constant_coefficient']:.2f})")
     
     # Add dlnPD lag if present
     if 'includes_lag' in model_row and model_row['includes_lag'] and pd.notna(model_row['lag_coefficient']):
-        clean_mv_names.append(f"dlnPD_lag1({model_row['lag_coefficient']:.3f})")
+        clean_mv_names.append(f"dlnPD_lag1({model_row['lag_coefficient']:.2f})")
     
     # Add mean reverting if present
     if 'mean_reverting_coefficient' in model_row and pd.notna(model_row['mean_reverting_coefficient']):
-        clean_mv_names.append(f"MeanRev({model_row['mean_reverting_coefficient']:.3f})")
+        clean_mv_names.append(f"MeanRev({model_row['mean_reverting_coefficient']:.2f})")
     
     # Add macro variables with lags and coefficients
     for i in range(1, 5):  # MV1 to MV4
@@ -180,19 +195,19 @@ def get_model_description_for_plotting(country, ovs_source, lag_option):
             
             # Show the lag information based on the lag_option
             if lag_option == 'with_lags' and lag > 0:
-                clean_mv_names.append(f"{mv_name}_lag{int(lag)}({coeff:.3f})")
+                clean_mv_names.append(f"{mv_name}_lag{int(lag)}({coeff:.2f})")
             else:
-                clean_mv_names.append(f"{mv_name}({coeff:.3f})")
+                clean_mv_names.append(f"{mv_name}({coeff:.2f})")
     
     return ' + '.join(clean_mv_names) if clean_mv_names else 'Model variables not available'
 
-def load_ovs_results(ovs_source='advanced', lag_option='no_lags'):
+def load_ovs_results(ovs_source='advanced', lag_option='ignore_lags'):
     """Load OVS results and return top model for each country
     
     Args:
         ovs_source: 'original', 'advanced', 'original_gcorr40q', 'advanced_gcorr40q', 
                    'original_gcorr40q_smoothed', or 'advanced_gcorr40q_smoothed'
-        lag_option: 'no_lags' (ignore MV lags) or 'with_lags' (use MV lags)
+        lag_option: 'ignore_lags' (ignore MV lags) or 'with_lags' (use MV lags)
     """
     ovs_results = {}  # Initialize the results dictionary
     
@@ -209,18 +224,18 @@ def load_ovs_results(ovs_source='advanced', lag_option='no_lags'):
         raise FileNotFoundError(f"OVS results file not found: {ovs_file}")
     
     all_results = pd.read_csv(ovs_file)
-    # Select top models
-    if rank_column and rank_column in all_results.columns:
-        # Use filtered results with ranking
-        top_models = all_results[all_results[rank_column] == 1]
-    else:
-        # For original results, get top model per country by adj_r2
-        top_models = all_results.loc[all_results.groupby('country')['adj_r2'].idxmax()]
+    # Don't pre-select top models here - let get_top_model_for_country handle the selection
+    # based on the lag_option parameter
+    top_models = all_results
     
-    # Process each top model
-    for _, model in top_models.iterrows():
-        country = model['country']
-        
+    # Process each country to get the appropriate model based on lag_option
+    countries = top_models['country'].unique()
+    for country in countries:
+        # Get the appropriate model for this country based on lag_option
+        model = get_top_model_for_country(country, ovs_source, lag_option)
+        if model is None:
+            continue
+            
         # Build model_vars and coefficients
         model_vars = []
         coefficients = []
@@ -252,8 +267,14 @@ def load_ovs_results(ovs_source='advanced', lag_option='no_lags'):
                 if lag_option == 'with_lags' and lag_col in model.index and pd.notna(model[lag_col]) and model[lag_col] > 0:
                     # Use lagged macro variable
                     mv_name = f"{base_mv_name}_lag{int(model[lag_col])}_Baseline_trans"
-                else:
-                    # Use unshifted macro variable (current implementation)
+                elif lag_option == 'ignore_lags':
+                    # Force unshifted macro variable (ignore any lags from OVS)
+                    mv_name = f"{base_mv_name}_Baseline_trans"
+                else:  # has_no_lags
+                    # Use variables as they were selected (should already be unshifted since has_no_lags==True)
+                    # but double-check to ensure no lags
+                    if lag_col in model.index and pd.notna(model[lag_col]) and model[lag_col] > 0:
+                        print(f"Warning: has_no_lags model has lag > 0 for {base_mv_name}, using unshifted version")
                     mv_name = f"{base_mv_name}_Baseline_trans"
                 
                 model_vars.append(mv_name)
@@ -309,11 +330,18 @@ def prepare_scenario_data(data, country, scenarios, model_info=None):
     
     return scenario_data
 
-def map_model_vars_to_scenario(model_vars, scenario):
+def map_model_vars_to_scenario(model_vars, scenario, lag_option='ignore_lags'):
     """
     Map model variable names from Baseline to scenario-specific names.
-    Note: We always use unshifted (lag 0) macro variables for forecasting,
-    even if OVS selected lagged versions for the regression model.
+    
+    Args:
+        model_vars: List of model variable names
+        scenario: Target scenario name
+        lag_option: How to handle lags ('no_lags' vs 'has_no_lags')
+    
+    Note: 
+    - 'ignore_lags': Always use unshifted (lag 0) macro variables for forecasting
+    - 'has_no_lags': Use variables as-is (these models were selected without lags)
     """
     if scenario == 'Baseline':
         return model_vars
@@ -321,9 +349,12 @@ def map_model_vars_to_scenario(model_vars, scenario):
     mapped_vars = []
     for var in model_vars:
         if '_Baseline_trans' in var:
-            # Replace _Baseline_trans with _{scenario}_trans
-            # This will always be unshifted since we ignore lags from OVS
-            mapped_var = var.replace('_Baseline_trans', f'_{scenario}_trans')
+            if lag_option == 'ignore_lags':
+                # Force unshifted variables (ignore any lags from OVS)
+                mapped_var = var.replace('_Baseline_trans', f'_{scenario}_trans')
+            else:  # has_no_lags
+                # Use variables as-is - these models were selected without lags
+                mapped_var = var.replace('_Baseline_trans', f'_{scenario}_trans')
             mapped_vars.append(mapped_var)
         else:
             # Keep non-baseline variables as is (dlnPD_lag1, mean_reverting, const)
@@ -335,12 +366,13 @@ def forecast_dlnpd(historical_data, forecast_data, model_info, scenario='Baselin
     """Forecast dlnPD using the OVS model"""
     model_vars = model_info['model_vars']
     coefficients = model_info['coefficients']
+    lag_option = model_info.get('lag_option', 'no_lags')
     
     # Convert coefficients list to dictionary for easier access
     coeff_dict = dict(zip(model_vars, coefficients))
     
     # Map model variables to scenario-specific names
-    scenario_model_vars = map_model_vars_to_scenario(model_vars, scenario)
+    scenario_model_vars = map_model_vars_to_scenario(model_vars, scenario, lag_option)
     
     # Combine historical and forecast data for continuous series
     combined_data = pd.concat([historical_data, forecast_data], ignore_index=True)
@@ -522,21 +554,37 @@ def plot_scenario_comparison(country, historical_data, scenario_forecasts, ovs_m
     if plots_dir is None:
         plots_dir = Path('Output/8.scenario_forecast/plots')
     
-    fig, axes = plt.subplots(2, 1, figsize=(16, 12))
+    # Set larger font sizes for all plot elements
+    plt.rcParams.update({
+        'font.size': 14,
+        'axes.titlesize': 16,
+        'axes.labelsize': 14,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+        'legend.fontsize': 12,
+        'figure.titlesize': 18
+    })
     
-    # === TOP PLOT: PD LEVELS ===
-    ax1 = axes[0]
+    fig, ax1 = plt.subplots(1, 1, figsize=(16, 8))
+    
+    # Define cutoff date for display (before 2040)
+    cutoff_date = pd.to_datetime('2040-01-01')
+    
+    # === PD LEVELS PLOT ===
     # Plot historical PD
     historical_data = historical_data.sort_values('yyyyqq')
-    # Only plot where PD data exists
-    hist_pd_data = historical_data[historical_data['cdsiedf5'].notna()]
+    # Only plot where PD data exists and before cutoff
+    hist_pd_data = historical_data[
+        (historical_data['cdsiedf5'].notna()) & 
+        (historical_data['yyyyqq'] < cutoff_date)
+    ]
     if not hist_pd_data.empty:
-        ax1.plot(hist_pd_data['yyyyqq'], hist_pd_data['cdsiedf5'], 
-                 label='Historical PD (Actual)', color='black', linewidth=2)
+        ax1.plot(hist_pd_data['yyyyqq'], hist_pd_data['cdsiedf5'] * 100, 
+                 label='Historical PD (Actual)', color='black', linewidth=3)
         
         # Get the last historical PD point for connecting forecasts
         last_hist_date = hist_pd_data['yyyyqq'].iloc[-1]
-        last_hist_pd = hist_pd_data['cdsiedf5'].iloc[-1]
+        last_hist_pd = hist_pd_data['cdsiedf5'].iloc[-1] * 100
     else:
         last_hist_date = None
         last_hist_pd = None
@@ -544,44 +592,48 @@ def plot_scenario_comparison(country, historical_data, scenario_forecasts, ovs_m
     # Plot historical 1-step forecasts if available
     if historical_forecast is not None and not historical_forecast.empty:
         historical_forecast = historical_forecast.sort_values('yyyyqq')
-        # Validate predicted PD values (use more lenient bounds)
-        valid_pred = historical_forecast['predicted_PD'].between(1e-8, 2.0)  # More lenient bounds
+        # Filter by cutoff date and validate predicted PD values
+        historical_forecast_filtered = historical_forecast[
+            historical_forecast['yyyyqq'] < cutoff_date
+        ]
+        valid_pred = historical_forecast_filtered['predicted_PD'].between(1e-8, 2.0)
         if valid_pred.sum() > 0:
-            plot_data = historical_forecast[valid_pred]
-            ax1.plot(plot_data['yyyyqq'], plot_data['predicted_PD'], 
+            plot_data = historical_forecast_filtered[valid_pred]
+            ax1.plot(plot_data['yyyyqq'], plot_data['predicted_PD'] * 100, 
                      label='1-Step Ahead Forecast (Historical)', color='gray', 
-                     linestyle='-', alpha=0.7, linewidth=1.5)
+                     linestyle='-', alpha=0.7, linewidth=2)
         else:
-            print(f"    Warning: No valid predicted PD values for {country} (range: {historical_forecast['predicted_PD'].min():.2e} to {historical_forecast['predicted_PD'].max():.2e})")
+            print(f"    Warning: No valid predicted PD values for {country} (range: {historical_forecast_filtered['predicted_PD'].min():.2e} to {historical_forecast_filtered['predicted_PD'].max():.2e})")
     
     # Plot forecast scenarios with connection to last historical point
     colors = ['blue', 'orange', 'red', 'green', 'purple']
     for i, (scenario, forecast_df) in enumerate(scenario_forecasts.items()):
         if not forecast_df.empty:
             forecast_df = forecast_df.sort_values('yyyyqq')
-            # Validate scenario forecast PD values (use more lenient bounds)
-            valid_scenario = forecast_df['predicted_PD'].between(1e-8, 2.0)  # More lenient bounds
+            # Filter by cutoff date and validate scenario forecast PD values
+            forecast_df_filtered = forecast_df[forecast_df['yyyyqq'] < cutoff_date]
+            valid_scenario = forecast_df_filtered['predicted_PD'].between(1e-8, 2.0)
             if valid_scenario.sum() > 0:
-                plot_data = forecast_df[valid_scenario]
+                plot_data = forecast_df_filtered[valid_scenario]
                 
                 # Connect forecast to last historical point if available
                 if last_hist_date is not None and last_hist_pd is not None and not plot_data.empty:
                     # Create connected line by prepending the last historical point
                     connection_dates = [last_hist_date] + plot_data['yyyyqq'].tolist()
-                    connection_values = [last_hist_pd] + plot_data['predicted_PD'].tolist()
+                    connection_values = [last_hist_pd] + (plot_data['predicted_PD'] * 100).tolist()
                     
                     ax1.plot(connection_dates, connection_values, 
                              label=f'{scenario} Forecast', color=colors[i % len(colors)], 
-                             linestyle='--', linewidth=2)
+                             linestyle='--', linewidth=3)
                 else:
                     # Fallback to disconnected plot if no historical connection available
-                    ax1.plot(plot_data['yyyyqq'], plot_data['predicted_PD'], 
+                    ax1.plot(plot_data['yyyyqq'], plot_data['predicted_PD'] * 100, 
                              label=f'{scenario} Forecast', color=colors[i % len(colors)], 
-                             linestyle='--', linewidth=2)
+                             linestyle='--', linewidth=3)
     
     # Mark forecast start
     ax1.axvline(pd.to_datetime(FORECAST_START), color='gray', linestyle=':', 
-                label='Forecast Start', alpha=0.7)
+                label='Forecast Start', alpha=0.7, linewidth=2)
     
     # Get model description using helper function
     ovs_source = ovs_model.get('ovs_source', 'filtered')
@@ -589,185 +641,105 @@ def plot_scenario_comparison(country, historical_data, scenario_forecasts, ovs_m
     model_desc = get_model_description_for_plotting(country, ovs_source, lag_option)
     
     ax1.set_title(f'PD Scenario Forecasts: {country}\n'
-                  f'Model: {model_desc}\n'
-                  f'adj_r2: {ovs_model["adj_r2"]:.3f}', fontsize=12)
-    ax1.set_ylabel('Probability of Default')
-    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+                  f'{model_desc}\n'
+                  f'Adjusted R-squared: {ovs_model["adj_r2"]*100:.2f}%', fontsize=15)
+    ax1.set_ylabel('Probability of Default (%)', fontsize=14)
+    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=12)
     ax1.grid(True, alpha=0.3)
     
-    # Set reasonable y-axis limits and use log scale if PD values span multiple orders of magnitude
+    # Set reasonable y-axis limits using linear scale only (now in percentage)
     if not hist_pd_data.empty:
-        # Collect all PD values for better range calculation
+        # Collect all PD values for better range calculation (convert to percentage)
         all_pd_values = []
         
         # Add historical PD values
-        all_pd_values.extend(hist_pd_data['cdsiedf5'].dropna().tolist())
+        all_pd_values.extend((hist_pd_data['cdsiedf5'] * 100).dropna().tolist())
         
         # Add historical forecast PD values if available (with more lenient validation)
         if historical_forecast is not None and not historical_forecast.empty:
-            # Use more lenient bounds for historical forecasts - they might be slightly outside [1e-6, 1.0]
-            valid_hist_forecast = historical_forecast['predicted_PD'].between(1e-8, 2.0)  # More lenient
+            historical_forecast_filtered = historical_forecast[
+                historical_forecast['yyyyqq'] < cutoff_date
+            ]
+            valid_hist_forecast = historical_forecast_filtered['predicted_PD'].between(1e-8, 2.0)
             if valid_hist_forecast.sum() > 0:
-                hist_forecast_values = historical_forecast.loc[valid_hist_forecast, 'predicted_PD'].tolist()
+                hist_forecast_values = (historical_forecast_filtered.loc[valid_hist_forecast, 'predicted_PD'] * 100).tolist()
                 all_pd_values.extend(hist_forecast_values)
-                
-                # Debug output for problematic countries
-                if country == 'USA' or len(hist_forecast_values) == 0:
-                    print(f"    {country} historical forecast PD range: {historical_forecast['predicted_PD'].min():.2e} to {historical_forecast['predicted_PD'].max():.2e}")
         
         # Add scenario forecast PD values (with more lenient validation)
         for scenario, forecast_df in scenario_forecasts.items():
             if not forecast_df.empty:
-                valid_scenario = forecast_df['predicted_PD'].between(1e-8, 2.0)  # More lenient
+                forecast_df_filtered = forecast_df[forecast_df['yyyyqq'] < cutoff_date]
+                valid_scenario = forecast_df_filtered['predicted_PD'].between(1e-8, 2.0)
                 if valid_scenario.sum() > 0:
-                    scenario_values = forecast_df.loc[valid_scenario, 'predicted_PD'].tolist()
+                    scenario_values = (forecast_df_filtered.loc[valid_scenario, 'predicted_PD'] * 100).tolist()
                     all_pd_values.extend(scenario_values)
-                    
-                    # Debug output for problematic countries
-                    if country == 'USA':
-                        print(f"    {country} {scenario} forecast PD range: {forecast_df['predicted_PD'].min():.2e} to {forecast_df['predicted_PD'].max():.2e}")
         
         if all_pd_values:
             pd_min, pd_max = min(all_pd_values), max(all_pd_values)
             
-            # Debug output for problematic countries
-            if country == 'USA':
-                print(f"    {country} combined PD range: {pd_min:.2e} to {pd_max:.2e}")
+            # Always use linear scale with adaptive padding
+            pd_range = pd_max - pd_min
             
-            # More robust y-axis logic
-            if pd_min > 0 and pd_max > 0:
-                # Use log scale if values span more than 2 orders of magnitude
-                if pd_max / pd_min > 100:
-                    ax1.set_yscale('log')
-                    # Set log scale limits with generous padding
-                    log_min = max(pd_min * 0.1, 1e-8)  # More generous lower padding
-                    log_max = min(pd_max * 10, 2.0)    # More generous upper padding
-                    ax1.set_ylim(log_min, log_max)
-                    
-                    if country == 'USA':
-                        print(f"    {country} using log scale: {log_min:.2e} to {log_max:.2e}")
-                else:
-                    # Linear scale with adaptive padding
-                    pd_range = pd_max - pd_min
-                    
-                    # Use larger padding for very small ranges
-                    if pd_range < pd_max * 0.1:  # Range is less than 10% of max value
-                        padding = pd_max * 0.2  # Use 20% of max value as padding
-                    else:
-                        padding = max(pd_range * 0.2, pd_max * 0.1)  # 20% of range or 10% of max
-                    
-                    y_min = max(pd_min - padding, 0)  # PD can't be negative
-                    y_max = min(pd_max + padding, 2.0)  # Allow some room above 1.0 for forecast errors
-                    
-                    # Ensure minimum range for very flat data
-                    if y_max - y_min < pd_max * 0.1:
-                        center = (y_min + y_max) / 2
-                        half_range = pd_max * 0.1
-                        y_min = max(center - half_range, 0)
-                        y_max = min(center + half_range, 2.0)
-                    
-                    ax1.set_ylim(y_min, y_max)
-                    
-                    if country == 'USA':
-                        print(f"    {country} using linear scale: {y_min:.2e} to {y_max:.2e}")
+            # Use larger padding for very small ranges
+            if pd_range < pd_max * 0.1:  # Range is less than 10% of max value
+                padding = pd_max * 0.2  # Use 20% of max value as padding
             else:
-                # Handle edge case where min/max might be zero or negative
-                ax1.set_ylim(0, max(0.01, pd_max * 1.5))
-                
-                if country == 'USA':
-                    print(f"    {country} using fallback scale: 0 to {max(0.01, pd_max * 1.5):.2e}")
+                padding = max(pd_range * 0.2, pd_max * 0.1)  # 20% of range or 10% of max
+            
+            y_min = max(pd_min - padding, 0)  # PD can't be negative
+            y_max = min(pd_max + padding, 200.0)  # Allow some room above 100% for forecast errors
+            
+            # Ensure minimum range for very flat data
+            if y_max - y_min < pd_max * 0.1:
+                center = (y_min + y_max) / 2
+                half_range = pd_max * 0.1
+                y_min = max(center - half_range, 0)
+                y_max = min(center + half_range, 200.0)
+            
+            ax1.set_ylim(y_min, y_max)
         else:
             # Fallback if no valid PD values found
-            ax1.set_ylim(0, 0.1)
-            
-            if country == 'USA':
-                print(f"    {country} using default fallback scale: 0 to 0.1")
+            ax1.set_ylim(0, 10)
     else:
         # Fallback if no historical data
-        ax1.set_ylim(0, 0.1)
-        
-        if country == 'USA':
-            print(f"    {country} no historical data - using default scale: 0 to 0.1")
+        ax1.set_ylim(0, 10)
     
-    # === BOTTOM PLOT: dlnPD (CHANGES) ===
-    ax2 = axes[1]
-    # Plot historical dlnPD
-    if 'dlnPD' in historical_data.columns:
-        hist_dlnpd_data = historical_data[historical_data['dlnPD'].notna()]
-        if not hist_dlnpd_data.empty:
-            ax2.plot(hist_dlnpd_data['yyyyqq'], hist_dlnpd_data['dlnPD'], 
-                     label='Historical dlnPD (Actual)', color='black', linewidth=2)
-            
-            # Get the last historical dlnPD point for connecting forecasts
-            last_hist_dlnpd = hist_dlnpd_data['dlnPD'].iloc[-1]
-        else:
-            last_hist_dlnpd = None
-    else:
-        last_hist_dlnpd = None
+    # Format y-axis as percentage
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.2f}%'))
     
-    # Plot historical 1-step dlnPD forecasts
-    if historical_forecast is not None and not historical_forecast.empty:
-        # Validate dlnPD predictions (remove extreme outliers)
-        valid_dlnpd = historical_forecast['predicted_dlnPD'].between(-2, 2)  # Reasonable dlnPD range
-        if valid_dlnpd.sum() > 0:
-            plot_data = historical_forecast[valid_dlnpd]
-            ax2.plot(plot_data['yyyyqq'], plot_data['predicted_dlnPD'], 
-                     label='1-Step Ahead dlnPD Forecast', color='gray', 
-                     linestyle='-', alpha=0.7, linewidth=1.5)
+    # Set x-axis limits to show data before 2040
+    ax1.set_xlim(left=None, right=cutoff_date)
     
-    # Plot forecast scenario dlnPD with connection to last historical point
-    for i, (scenario, forecast_df) in enumerate(scenario_forecasts.items()):
-        if not forecast_df.empty:
-            forecast_df = forecast_df.sort_values('yyyyqq')
-            # Validate scenario dlnPD values
-            valid_dlnpd = forecast_df['predicted_dlnPD'].between(-2, 2)
-            if valid_dlnpd.sum() > 0:
-                plot_data = forecast_df[valid_dlnpd]
-                
-                # Connect forecast to last historical dlnPD point if available
-                if (last_hist_date is not None and last_hist_dlnpd is not None and 
-                    not plot_data.empty):
-                    # Create connected line by prepending the last historical point
-                    connection_dates = [last_hist_date] + plot_data['yyyyqq'].tolist()
-                    connection_values = [last_hist_dlnpd] + plot_data['predicted_dlnPD'].tolist()
-                    
-                    ax2.plot(connection_dates, connection_values, 
-                             label=f'{scenario} dlnPD', color=colors[i % len(colors)], 
-                             linestyle='--', linewidth=2)
-                else:
-                    # Fallback to disconnected plot if no historical connection available
-                    ax2.plot(plot_data['yyyyqq'], plot_data['predicted_dlnPD'], 
-                             label=f'{scenario} dlnPD', color=colors[i % len(colors)], 
-                             linestyle='--', linewidth=2)
+    # Add x-label to the PD plot since it's now the only plot
+    ax1.set_xlabel('Date', fontsize=14)
     
-    # Mark forecast start
-    ax2.axvline(pd.to_datetime(FORECAST_START), color='gray', linestyle=':', 
-                alpha=0.7)
-    
-    ax2.set_title('dlnPD (Log Changes in PD)')
-    ax2.set_xlabel('Date')
-    ax2.set_ylabel('dlnPD')
-    ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    ax2.grid(True, alpha=0.3)
-    ax2.axhline(y=0, color='black', linestyle='-', alpha=0.3)  # Zero line
-    
-    # Set reasonable y-axis limits for dlnPD
-    if 'dlnPD' in historical_data.columns:
-        hist_dlnpd_data = historical_data[historical_data['dlnPD'].notna()]
-        if not hist_dlnpd_data.empty:
-            dlnpd_std = hist_dlnpd_data['dlnPD'].std()
-            ax2.set_ylim(-3*dlnpd_std, 3*dlnpd_std)  # ±3 standard deviations
+    # Increase tick label sizes
+    ax1.tick_params(axis='both', which='major', labelsize=12)
     
     plt.tight_layout()
     
     # Save plot
     plt.savefig(plots_dir / f'scenario_forecast_{country}_{combination_name}.png', dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # Reset matplotlib rcParams to default
+    plt.rcdefaults()
 
 def plot_macro_variables(country, historical_data, ovs_model, plots_dir=None, combination_name=""):
     """Plot macro variables in separate subplots, showing only data after PD start"""
     if plots_dir is None:
         plots_dir = Path('Output/8.scenario_forecast/plots')
+    
+    # Set larger font sizes for all plot elements
+    plt.rcParams.update({
+        'font.size': 14,
+        'axes.titlesize': 16,
+        'axes.labelsize': 14,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+        'legend.fontsize': 12,
+        'figure.titlesize': 18
+    })
     
     try:
         # Load all scenario data to show macro variable patterns
@@ -791,8 +763,12 @@ def plot_macro_variables(country, historical_data, ovs_model, plots_dir=None, co
         if pd_start_date is None:
             pd_start_date = pd.to_datetime(FORECAST_START)
         
-        # Filter data to show only after PD start
-        country_data = country_data[country_data['yyyyqq'] >= pd_start_date]
+        # Filter data to show only after PD start and before 2040
+        cutoff_date = pd.to_datetime('2040-01-01')
+        country_data = country_data[
+            (country_data['yyyyqq'] >= pd_start_date) & 
+            (country_data['yyyyqq'] < cutoff_date)
+        ]
         
         # Get macro variables using helper function
         ovs_source = ovs_model.get('ovs_source', 'filtered')
@@ -829,7 +805,7 @@ def plot_macro_variables(country, historical_data, ovs_model, plots_dir=None, co
                     if not valid_data.empty:
                         linestyle = '-' if scenario == 'Baseline' else '--'
                         alpha = 1.0 if scenario == 'Baseline' else 0.7
-                        linewidth = 2 if scenario == 'Baseline' else 1.5
+                        linewidth = 3 if scenario == 'Baseline' else 2
                         
                         ax.plot(valid_data['yyyyqq'], valid_data[mv_scenario_name], 
                                color=colors[i % len(colors)], linestyle=linestyle, 
@@ -837,26 +813,32 @@ def plot_macro_variables(country, historical_data, ovs_model, plots_dir=None, co
             
             # Mark forecast start
             ax.axvline(pd.to_datetime(FORECAST_START), color='gray', linestyle=':', 
-                      label='Forecast Start', alpha=0.7)
+                      label='Forecast Start', alpha=0.7, linewidth=2)
             
             # Mark PD start if different from forecast start
             if pd_start_date != pd.to_datetime(FORECAST_START):
                 ax.axvline(pd_start_date, color='lightgray', linestyle=':', 
-                          label='PD Start', alpha=0.7)
+                          label='PD Start', alpha=0.7, linewidth=2)
             
-            ax.set_title(f'{clean_mv_name}')
-            ax.set_ylabel('Standardized Value')
-            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            ax.set_title(f'{clean_mv_name}', fontsize=16)
+            ax.set_ylabel('Standardized Value', fontsize=14)
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=12)
             ax.grid(True, alpha=0.3)
+            
+            # Set x-axis limits to show data before 2040
+            ax.set_xlim(left=None, right=cutoff_date)
+            
+            # Increase tick label sizes
+            ax.tick_params(axis='both', which='major', labelsize=12)
             
             # Only add x-label to bottom subplot
             if j == n_vars - 1:
-                ax.set_xlabel('Date')
+                ax.set_xlabel('Date', fontsize=14)
         
         # Main title - include lag information
         lag_info = " (with lags)" if lag_option == 'with_lags' else " (no lags)"
         fig.suptitle(f'Macro Variables for {country}{lag_info} (After PD Start: {pd_start_date.strftime("%Y-%m-%d")})', 
-                     fontsize=14, y=0.98)
+                     fontsize=18, y=0.98)
         
         plt.tight_layout()
         
@@ -871,11 +853,14 @@ def plot_macro_variables(country, historical_data, ovs_model, plots_dir=None, co
         # Create empty plot with error message
         fig, ax = plt.subplots(1, 1, figsize=(16, 8))
         ax.text(0.5, 0.5, f'Error loading macro variable data: {str(e)}', 
-                transform=ax.transAxes, ha='center', va='center', fontsize=12)
-        ax.set_title(f'Macro Variables for {country} (Error)')
+                transform=ax.transAxes, ha='center', va='center', fontsize=14)
+        ax.set_title(f'Macro Variables for {country} (Error)', fontsize=16)
         plt.tight_layout()
         plt.savefig(plots_dir / f'macro_variables_{country}_{combination_name}.png', dpi=300, bbox_inches='tight')
-    plt.close()
+        plt.close()
+    
+    # Reset matplotlib rcParams to default
+    plt.rcdefaults()
 
 def calculate_forecast_metrics(historical_forecast):
     """Calculate forecast accuracy metrics for historical 1-step forecasts"""
@@ -1109,11 +1094,19 @@ def main():
                             plot_scenario_comparison_combo(country, country_hist, scenario_forecasts, model_info, 
                                                          historical_forecast, country_plots_dir, combination_name)
                             
-                            # Copy scenario forecast chart to centralized directory for comparison (advanced filtering + no lags only)
-                            if ovs_source in ['advanced', 'advanced_gcorr40q', 'advanced_gcorr40q_smoothed'] and lag_option == 'no_lags':
+                            # Copy scenario forecast chart to centralized directory for comparison (advanced filtering + no lags or has_no_lags)
+                            if ovs_source in ['advanced', 'advanced_gcorr40q', 'advanced_gcorr40q_smoothed']:
                                 source_chart = country_plots_dir / f'scenario_forecast_{country}_{combination_name}.png'
-                                target_chart = comparison_plots_dir / f'scenario_forecast_{country}_{combination_name}.png'
-                                if source_chart.exists():
+                                
+                                # Copy to appropriate centralized directory based on lag option
+                                if lag_option == 'ignore_lags':
+                                    target_chart = comparison_plots_dir_ignore_lags / f'scenario_forecast_{country}_{combination_name}.png'
+                                elif lag_option == 'has_no_lags':
+                                    target_chart = comparison_plots_dir_has_no_lags / f'scenario_forecast_{country}_{combination_name}.png'
+                                else:
+                                    target_chart = None
+                                
+                                if target_chart and source_chart.exists():
                                     shutil.copy2(source_chart, target_chart)
                             
                             plot_macro_variables_combo(country, country_hist, model_info, country_plots_dir, combination_name)
@@ -1216,7 +1209,8 @@ def main():
     print(f"Results saved to: {output_dir}")
     print(f"Generated 8 combinations: 4 OVS sources × 2 lag options")
     print(f"Master files: summary and metrics CSVs created")
-    print(f"Comparison charts: {comparison_plots_dir}")
+    print(f"Comparison charts (ignore_lags): {comparison_plots_dir_ignore_lags}")
+    print(f"Comparison charts (has_no_lags): {comparison_plots_dir_has_no_lags}")
     print(f"{'='*60}")
 
 if __name__ == "__main__":

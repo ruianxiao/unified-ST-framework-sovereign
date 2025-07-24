@@ -20,9 +20,9 @@ PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Model combinations to use from OVS
 OVS_COMBINATIONS = {
-    'ovs_historical': 'advanced_no_lags',  # OVS trained on historical data only
-    'ovs_gcorr_unsmoothed': 'advanced_gcorr40q_no_lags',  # OVS trained on GCorr unsmoothed data
-    'ovs_gcorr_smoothed': 'advanced_gcorr40q_smoothed_no_lags'  # OVS trained on GCorr smoothed data
+    'ovs_historical': 'advanced_has_no_lags',  # OVS trained on historical data only
+    'ovs_gcorr_unsmoothed': 'advanced_gcorr40q_has_no_lags',  # OVS trained on GCorr unsmoothed data
+    'ovs_gcorr_smoothed': 'advanced_gcorr40q_smoothed_has_no_lags'  # OVS trained on GCorr smoothed data
 }
 
 # GCorr data types to compare
@@ -142,23 +142,7 @@ def get_country_metadata(country):
     """Get metadata about the country from both models"""
     metadata = {'country': country}
     
-    # Try to get OVS metadata for all combination types
-    try:
-        ovs_summary_file = OVS_FORECAST_DIR / country / f'{country}_all_combinations_summary.csv'
-        if ovs_summary_file.exists():
-            ovs_summary = pd.read_csv(ovs_summary_file)
-            
-            # Get metadata for each OVS combination type
-            for ovs_type, combination in OVS_COMBINATIONS.items():
-                ovs_filtered = ovs_summary[ovs_summary['combination'] == combination]
-                if not ovs_filtered.empty:
-                    metadata[f'{ovs_type}_adj_r2'] = ovs_filtered['model_adj_r2'].tolist()[0]
-                    metadata[f'{ovs_type}_pd_mape'] = ovs_filtered['historical_pd_mape'].tolist()[0]
-                    metadata[f'{ovs_type}_pd_correlation'] = ovs_filtered['historical_pd_correlation'].tolist()[0]
-    except Exception as e:
-        print(f"  Warning: Could not load OVS metadata for {country}: {e}")
-    
-    # Try to get detailed OVS variable information from filtered results
+    # Get OVS metadata from step 7 filtered results files
     try:
         ovs_combinations_map = {
             'ovs_historical': 'advanced',
@@ -172,8 +156,22 @@ def get_country_metadata(country):
                 ovs_detailed = pd.read_csv(ovs_detailed_file)
                 country_results = ovs_detailed[ovs_detailed['country'] == country]
                 if not country_results.empty:
-                    # Get the first (best) model for this country
-                    best_model = country_results.iloc[0]
+                    # Apply has_no_lags filter to match scenario forecast script behavior
+                    if 'has_no_lags' in country_results.columns:
+                        has_no_lags_models = country_results[country_results['has_no_lags'] == True]
+                        if not has_no_lags_models.empty:
+                            # Get the best has_no_lags model (lowest rank)
+                            best_model = has_no_lags_models.loc[has_no_lags_models['rank_in_country'].idxmin()]
+                        else:
+                            # Fallback to first model if no has_no_lags models available
+                            best_model = country_results.iloc[0]
+                            print(f"  Warning: No has_no_lags models for {country} in {file_suffix}, using rank 1 model")
+                    else:
+                        # Fallback if has_no_lags column doesn't exist
+                        best_model = country_results.iloc[0]
+                    
+                    # Get adjusted R² from the filtered results
+                    metadata[f'{ovs_type}_adj_r2'] = best_model.get('adj_r2')
                     
                     # Extract MV variables and coefficients
                     mv_info = []
@@ -185,7 +183,7 @@ def get_country_metadata(country):
                     
                     metadata[f'{ovs_type}_mv_info'] = '; '.join(mv_info) if mv_info else 'No MV variables'
     except Exception as e:
-        print(f"  Warning: Could not load detailed OVS variable info for {country}: {e}")
+        print(f"  Warning: Could not load OVS metadata for {country}: {e}")
     
     # Try to get GCorr metadata
     try:
@@ -194,9 +192,11 @@ def get_country_metadata(country):
             gcorr_summary = pd.read_csv(gcorr_summary_file)
             gcorr_country = gcorr_summary[gcorr_summary['country'] == country]
             if not gcorr_country.empty:
-                metadata['gcorr_rsq'] = gcorr_country['rsq'].iloc[0]
-                metadata['gcorr_mv_variables'] = gcorr_country['mv_variables'].iloc[0]
-                metadata['gcorr_num_mv'] = gcorr_country['num_mv'].iloc[0]
+                for _, row in gcorr_country.iterrows():
+                    metadata['gcorr_rsq'] = row['rsq']
+                    metadata['gcorr_mv_variables'] = row['mv_variables']
+                    metadata['gcorr_num_mv'] = row['num_mv']
+                    break  # Take first row
     except Exception as e:
         print(f"  Warning: Could not load GCorr metadata for {country}: {e}")
     
@@ -242,12 +242,14 @@ def create_single_comparison_plot(country, gcorr_type, historical_data, ovs_fore
     fig, axes = plt.subplots(2, 2, figsize=(20, 12))
     fig.suptitle(f'OVS vs GCorr Forecast Comparison: {country} ({gcorr_type.capitalize()})', fontsize=16, y=0.98)
     
-    # Define colors for scenarios
-    colors = {
-        'Baseline': 'green',
-        'S1': 'blue', 
-        'S3': 'orange',
-        'S4': 'red'
+    # Define colors for models (consistent across all scenarios)
+    model_colors = {
+        'historical': 'black',
+        'ovs_historical': 'blue',
+        'ovs_gcorr_unsmoothed': 'green', 
+        'ovs_gcorr_smoothed': 'orange',
+        'gcorr_unsmoothed': 'red',
+        'gcorr_smoothed': 'purple'
     }
     
     # Define scenario mappings (GCorr uses 'baseline' while OVS uses 'Baseline')
@@ -309,36 +311,46 @@ def create_single_comparison_plot(country, gcorr_type, historical_data, ovs_fore
     
     # Plot 1: Baseline scenario comparison
     ax1 = axes[0, 0]
-    plot_scenario_comparison(ax1, 'Baseline', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
+    plot_scenario_comparison(ax1, 'Baseline', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, model_colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
     
     # Plot 2: S1 scenario comparison
     ax2 = axes[0, 1]
-    plot_scenario_comparison(ax2, 'S1', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
+    plot_scenario_comparison(ax2, 'S1', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, model_colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
     
     # Plot 3: S3 scenario comparison
     ax3 = axes[1, 0]
-    plot_scenario_comparison(ax3, 'S3', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
+    plot_scenario_comparison(ax3, 'S3', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, model_colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
     
     # Plot 4: S4 scenario comparison
     ax4 = axes[1, 1]
-    plot_scenario_comparison(ax4, 'S4', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
+    plot_scenario_comparison(ax4, 'S4', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, model_colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
+    
+    # Helper function to safely format numeric values
+    def safe_format(value, format_str, default='N/A'):
+        if value is None or value == 'N/A' or pd.isna(value):
+            return default
+        try:
+            return format_str.format(value)
+        except (ValueError, TypeError):
+            return default
     
     # Add metadata text with MV variable information
-    hist_text = f"OVS (Historical): Adj R² = {metadata.get('ovs_historical_adj_r2', 'N/A'):.3f}, " \
-                f"PD MAPE = {metadata.get('ovs_historical_pd_mape', 'N/A'):.1f}%\n" \
+    hist_adj_r2 = safe_format(metadata.get('ovs_historical_adj_r2'), '{:.3f}')
+    hist_text = f"OVS (Historical): Adj R² = {hist_adj_r2}\n" \
                 f"  MV Variables: {metadata.get('ovs_historical_mv_info', 'N/A')}\n"
     
     # Add metadata for GCorr-trained OVS models
     if gcorr_type == 'unsmoothed':
-        gcorr_ovs_text = f"OVS (GCorr Unsmoothed): Adj R² = {metadata.get('ovs_gcorr_unsmoothed_adj_r2', 'N/A'):.3f}, " \
-                        f"PD MAPE = {metadata.get('ovs_gcorr_unsmoothed_pd_mape', 'N/A'):.1f}%\n" \
+        gcorr_adj_r2 = safe_format(metadata.get('ovs_gcorr_unsmoothed_adj_r2'), '{:.3f}')
+        gcorr_ovs_text = f"OVS (GCorr Unsmoothed): Adj R² = {gcorr_adj_r2}\n" \
                         f"  MV Variables: {metadata.get('ovs_gcorr_unsmoothed_mv_info', 'N/A')}\n"
     else:
-        gcorr_ovs_text = f"OVS (GCorr Smoothed): Adj R² = {metadata.get('ovs_gcorr_smoothed_adj_r2', 'N/A'):.3f}, " \
-                        f"PD MAPE = {metadata.get('ovs_gcorr_smoothed_pd_mape', 'N/A'):.1f}%\n" \
+        gcorr_adj_r2 = safe_format(metadata.get('ovs_gcorr_smoothed_adj_r2'), '{:.3f}')
+        gcorr_ovs_text = f"OVS (GCorr Smoothed): Adj R² = {gcorr_adj_r2}\n" \
                         f"  MV Variables: {metadata.get('ovs_gcorr_smoothed_mv_info', 'N/A')}\n"
     
-    gcorr_text = f"GCorr: R² = {metadata.get('gcorr_rsq', 'N/A'):.3f}, " \
+    gcorr_rsq = safe_format(metadata.get('gcorr_rsq'), '{:.3f}')
+    gcorr_text = f"GCorr: R² = {gcorr_rsq}, " \
                 f"MV = {metadata.get('gcorr_mv_variables', 'N/A')}"
     
     metadata_text = hist_text + gcorr_ovs_text + gcorr_text
@@ -355,28 +367,25 @@ def create_single_comparison_plot(country, gcorr_type, historical_data, ovs_fore
     
     print(f"  Saved comparison plot for {country} ({gcorr_type})")
 
-def plot_scenario_comparison(ax, scenario, gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot):
+def plot_scenario_comparison(ax, scenario, gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, model_colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot):
     """Plot comparison for a specific scenario with consistent y-axis scaling"""
     
     # Plot historical data
     if historical_data is not None and not historical_data.empty:
         ax.plot(historical_data['yyyyqq'], historical_data['historical_pd'], 
-                'black', linewidth=2, label='Historical', alpha=0.7)
+                color=model_colors['historical'], linewidth=2, label='Historical', alpha=0.7)
     
-    color = colors[scenario]
-    
-    # Define line styles for different OVS types (consistent across both chart types)
-    ovs_styles = {
-        'ovs_historical': '-',
-        'ovs_gcorr_unsmoothed': ':',
-        'ovs_gcorr_smoothed': ':'
-    }
-    
-    # Define labels for different OVS types
+    # Define labels and line styles for different OVS types
     ovs_labels = {
         'ovs_historical': 'OVS (Historical)',
         'ovs_gcorr_unsmoothed': 'OVS (GCorr Unsmoothed)',
         'ovs_gcorr_smoothed': 'OVS (GCorr Smoothed)'
+    }
+    
+    ovs_line_styles = {
+        'ovs_historical': ':',  # dotted line for OVS Historical
+        'ovs_gcorr_unsmoothed': '-',  # solid line for OVS with GCorr
+        'ovs_gcorr_smoothed': '-'  # solid line for OVS with GCorr
     }
     
     # Plot OVS forecasts - prioritize the matching GCorr type
@@ -403,7 +412,7 @@ def plot_scenario_comparison(ax, scenario, gcorr_type, historical_data, ovs_fore
                     plot_values = ovs_forecast[ovs_col]
                 
                 ax.plot(plot_dates, plot_values, 
-                        color=color, linestyle=ovs_styles[ovs_type], linewidth=2.5, alpha=0.9,
+                        color=model_colors[ovs_type], linestyle=ovs_line_styles[ovs_type], linewidth=2.5, alpha=0.9,
                         label=ovs_labels[ovs_type])
     
     # GCorr forecast
@@ -422,8 +431,9 @@ def plot_scenario_comparison(ax, scenario, gcorr_type, historical_data, ovs_fore
                     plot_dates = gcorr_forecast['yyyyqq']
                     plot_values = gcorr_forecast[gcorr_col]
                 
+                gcorr_color_key = f'gcorr_{gcorr_type}'
                 ax.plot(plot_dates, plot_values, 
-                        color=color, linestyle='--', linewidth=3, alpha=0.9,
+                        color=model_colors[gcorr_color_key], linestyle='--', linewidth=3, alpha=0.9,
                         label=f'GCorr ({gcorr_type.capitalize()})')
     
     # Formatting
@@ -506,7 +516,6 @@ def create_summary_table(all_results):
         # Add metadata for all OVS types
         for ovs_type in ['ovs_historical', 'ovs_gcorr_unsmoothed', 'ovs_gcorr_smoothed']:
             summary_record[f'{ovs_type}_adj_r2'] = result['metadata'].get(f'{ovs_type}_adj_r2', np.nan)
-            summary_record[f'{ovs_type}_pd_mape'] = result['metadata'].get(f'{ovs_type}_pd_mape', np.nan)
         
         # Add forecast differences
         if result['differences']:
@@ -651,7 +660,6 @@ def main():
             # Check for historical OVS data
             if 'ovs_historical_adj_r2' in both_models.columns:
                 print(f"Average OVS (Historical) Adj R²: {both_models['ovs_historical_adj_r2'].mean():.3f}")
-                print(f"Average OVS (Historical) PD MAPE: {both_models['ovs_historical_pd_mape'].mean():.1f}%")
             
             # Check for GCorr-trained OVS data
             if 'ovs_gcorr_unsmoothed_adj_r2' in both_models.columns:

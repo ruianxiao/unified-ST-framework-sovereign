@@ -64,9 +64,9 @@ meanrev_col = 'mean_reverting'  # to be created
 
 # --- OVS PARAMETERS ---
 max_k = 4  # max number of macro variables (excluding lag and mean-reverting)
-max_lag = 4  # allow 0-4 lags per macro variable
+max_lag = 0  # allow 0-4 lags per macro variable
 max_corr = 0.8
-max_pval = 0.15
+max_pval = 0.3
 
 # --- SIGN CONSTRAINTS ---
 # Map macro variable base names to sign constraints based on scenario ordering analysis
@@ -740,7 +740,9 @@ def main():
         # Exclude specific variables from OVS selection
         excluded_vars = [
             'Monetary Policy Rate_Baseline_trans',
-            'Government 10Y Bond Rate_Baseline_trans'
+            'Government 10Y Bond Rate_Baseline_trans',
+            # 'FX_Baseline_trans',
+            # 'Term Spread_Baseline_trans'
         ]
         
         macro_vars = [col for col in baseline_mv_cols if col not in [depvar, lag_col, meanrev_col] + excluded_vars]
@@ -770,10 +772,29 @@ def main():
             else:
                 historical_mask = data['yyyyqq'] < pd.Timestamp('2025-07-01')
             historical_ttc = data[historical_mask].groupby(country_col)['PD'].mean()
-            data[ttc_col] = data[country_col].map(historical_ttc)
+            # Use merge to avoid deprecated replace downcasting behavior
+            ttc_mapping = historical_ttc.reset_index()
+            ttc_mapping.columns = [country_col, ttc_col]
+            data = data.merge(ttc_mapping[[country_col, ttc_col]], on=country_col, how='left')
         else:
             data[ttc_col] = data.groupby(country_col)['PD'].transform('mean')
         data[meanrev_col] = np.log(data[ttc_col]) - data['lnPD_lag']
+        
+        # Remove duplicated historical data when GCorr forecast is included
+        if INCLUDE_GCORR_FORECAST and 'scenario' in data.columns:
+            # Keep only one copy of historical data (from baseline scenario) and all forecast data
+            historical_data_baseline = data[(data['scenario'] == 'baseline') & 
+                                          ((data['is_forecast'] == False) | data['is_forecast'].isna())]
+            forecast_data_all = data[data['is_forecast'] == True]
+            
+            # Combine baseline historical + all forecast scenarios
+            data = pd.concat([historical_data_baseline, forecast_data_all], ignore_index=True)
+            if 'scenario' in data.columns:
+                data = data.sort_values([country_col, 'scenario', 'yyyyqq'])
+            else:
+                data = data.sort_values([country_col, 'yyyyqq'])
+            
+            print(f"Removed duplicated historical data: {len(historical_data_baseline)} historical + {len(forecast_data_all)} forecast = {len(data)} total records")
         
         # Drop rows with missing values
         data = data.dropna(subset=[depvar, lag_col, meanrev_col] + macro_vars, how='all')

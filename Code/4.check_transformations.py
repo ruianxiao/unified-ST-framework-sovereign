@@ -246,21 +246,42 @@ def decide_transformation(var, baseline_col, data):
     # --- Concise transformation decision logic ---
     if var_results['stationarity_tests']:
         stationary_ratios = var_results['stationarity_tests']['stationary_ratio']
+        mean_p_values = var_results['stationarity_tests']['mean_p_value']
+        
         # If any values are negative, only diff is allowed
         if has_negative:
             best_trans = 'diff'
+            reason = "Variable has negative values - only diff transformation possible"
         else:
             diff_ratio = stationary_ratios.get('diff', 0)
             logret_ratio = stationary_ratios.get('log_return', 0)
             # If both are equally good (within 1%), use expected transformation
             if abs(diff_ratio - logret_ratio) < 0.01:
                 best_trans = EXPECTED_TRANS.get(var, 'diff')
+                reason = f"Similar performance (diff: {diff_ratio:.1%}, log_return: {logret_ratio:.1%}) - using expected transformation"
             else:
                 best_trans = 'diff' if diff_ratio > logret_ratio else 'log_return'
+                reason = f"Better stationarity: {best_trans} ({(diff_ratio if best_trans == 'diff' else logret_ratio):.1%} vs {(logret_ratio if best_trans == 'diff' else diff_ratio):.1%})"
+        
         var_results['recommended_transformation'] = best_trans
+        var_results['reason'] = reason
+        var_results['stationarity_pvalue'] = mean_p_values.get(best_trans, np.nan)
+        var_results['has_negative_values'] = has_negative
     else:
         # Fallback: use expected transformation or diff
-        var_results['recommended_transformation'] = 'diff' if has_negative else EXPECTED_TRANS.get(var, 'diff')
+        best_trans = 'diff' if has_negative else EXPECTED_TRANS.get(var, 'diff')
+        var_results['recommended_transformation'] = best_trans
+        var_results['reason'] = "No valid stationarity tests - using fallback transformation"
+        var_results['stationarity_pvalue'] = np.nan
+        var_results['has_negative_values'] = has_negative
+    
+    # Add seasonality information
+    if var_results['seasonality_tests']:
+        seasonality_strength = var_results['seasonality_tests'].get('mean_seasonality_strength', np.nan)
+        var_results['seasonality_detected'] = not pd.isna(seasonality_strength) and seasonality_strength > 0.1
+    else:
+        var_results['seasonality_detected'] = False
+    
     return var_results
 
 def apply_seasonal_adjustment(data, var, scenarios, mask_hist):
@@ -439,6 +460,200 @@ def plot_transformation_results(data, transformed_data, macro_vars, scenarios, o
     # Plot Term Spread variable
     plot_single_variable_transformation(data, transformed_data, 'Term Spread', output_dir)
 
+def test_final_stationarity(transformed_data, macro_vars, transformation_decisions, output_dir):
+    """Test stationarity of final transformed macro variables (Baseline + historical data only)"""
+    print("\n" + "="*60)
+    print("TESTING FINAL TRANSFORMED VARIABLES STATIONARITY")
+    print("="*60)
+    print("Testing Baseline scenario with historical data only (same as transformation decision process)")
+    
+    # Variables that underwent MA detrending
+    ma_detrended_vars = ['Inflation', 'Equity', 'Government Consumption']
+    
+    # Get historical data mask
+    mask_hist = transformed_data['yyyyqq'] < pd.Timestamp('2025-07-01')
+    
+    final_stationarity_results = []
+    summary_results = {}
+    
+    # Test all macro variables plus Term Spread
+    all_vars = list(macro_vars.keys()) + ['Term Spread']
+    
+    for var in all_vars:
+        print(f"\n--- Testing {var} (Baseline + Historical) ---")
+        
+        # Get transformation info
+        trans_info = transformation_decisions.get(var, {})
+        recommended_trans = trans_info.get('recommended_transformation', 'unknown')
+        has_ma_detrending = var in ma_detrended_vars
+        
+        # Only test Baseline scenario
+        trans_col = f"{var}_Baseline_trans"
+        
+        if trans_col not in transformed_data.columns:
+            print(f"  Skipping: column {trans_col} not found")
+            continue
+        
+        scenario_results = []
+        countries_tested = 0
+        countries_passed = 0
+        
+        # Test each country (historical data only)
+        for country in transformed_data['cinc'].unique():
+            country_mask = (transformed_data['cinc'] == country) & mask_hist
+            country_data = transformed_data[country_mask]
+            
+            if len(country_data) == 0:
+                continue
+            
+            series = country_data[trans_col].dropna()
+            
+            if len(series) < 20:  # Need sufficient data for ADF test
+                continue
+            
+            countries_tested += 1
+            
+            # Perform stationarity test
+            stat_result = check_stationarity(series)
+            
+            if stat_result['error'] is None:
+                is_stationary = stat_result['is_stationary']
+                p_value = stat_result['p_value']
+                
+                if is_stationary:
+                    countries_passed += 1
+                
+                scenario_results.append({
+                    'variable': var,
+                    'country': country,
+                    'transformation': recommended_trans,
+                    'ma_detrended': has_ma_detrending,
+                    'is_stationary': is_stationary,
+                    'p_value': p_value,
+                    'observations': len(series)
+                })
+                
+                final_stationarity_results.append({
+                    'variable': var,
+                    'country': country,
+                    'transformation': recommended_trans,
+                    'ma_detrended': has_ma_detrending,
+                    'is_stationary': is_stationary,
+                    'p_value': p_value,
+                    'observations': len(series)
+                })
+        
+        # Calculate summary statistics
+        if countries_tested > 0:
+            pass_rate = countries_passed / countries_tested
+            avg_p_value = np.mean([r['p_value'] for r in scenario_results])
+            
+            print(f"  {countries_passed}/{countries_tested} countries passed ({pass_rate:.1%}) | Avg p-value: {avg_p_value:.4f}")
+            
+            if pass_rate >= 0.80:
+                status = "✅ Excellent"
+            elif pass_rate >= 0.70:
+                status = "✅ Good"
+            elif pass_rate >= 0.60:
+                status = "⚠️  Acceptable"
+            else:
+                status = "❌ Poor"
+            
+            print(f"  Status: {status}")
+            
+            var_summary = {
+                'variable': var,
+                'transformation': recommended_trans,
+                'ma_detrended': has_ma_detrending,
+                'countries_tested': countries_tested,
+                'countries_passed': countries_passed,
+                'pass_rate': pass_rate,
+                'avg_p_value': avg_p_value,
+                'status': status
+            }
+        else:
+            print(f"  No countries with sufficient data")
+            var_summary = {
+                'variable': var,
+                'transformation': recommended_trans,
+                'ma_detrended': has_ma_detrending,
+                'countries_tested': 0,
+                'countries_passed': 0,
+                'pass_rate': 0.0,
+                'avg_p_value': np.nan,
+                'status': "❌ No Data"
+            }
+        
+        summary_results[var] = var_summary
+    
+    # Save detailed results to CSV
+    if final_stationarity_results:
+        results_df = pd.DataFrame(final_stationarity_results)
+        results_file = f'{output_dir}/final_stationarity_results.csv'
+        results_df.to_csv(results_file, index=False)
+        print(f"\nDetailed stationarity results saved to: {results_file}")
+        
+        # Save summary results to JSON
+        summary_file = f'{output_dir}/final_stationarity_summary.json'
+        with open(summary_file, 'w') as f:
+            # Convert numpy types for JSON serialization
+            def convert_numpy(obj):
+                if isinstance(obj, np.integer):
+                    return int(obj)
+                elif isinstance(obj, np.floating):
+                    return float(obj)
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif pd.isna(obj):
+                    return None
+                return obj
+            
+            json_summary = {}
+            for var, data in summary_results.items():
+                json_summary[var] = {}
+                for key, value in data.items():
+                    json_summary[var][key] = convert_numpy(value)
+            
+            json.dump(json_summary, f, indent=2)
+        
+        print(f"Summary results saved to: {summary_file}")
+        
+        # Print overall summary
+        print("\n" + "="*60)
+        print("FINAL STATIONARITY SUMMARY (Baseline + Historical)")
+        print("="*60)
+        
+        baseline_summary = []
+        for var, result in summary_results.items():
+            baseline_summary.append({
+                'variable': var,
+                'transformation': result['transformation'],
+                'ma_detrended': result['ma_detrended'],
+                'pass_rate': result['pass_rate'],
+                'status': result['status']
+            })
+        
+        if baseline_summary:
+            print("\nResults:")
+            for result in sorted(baseline_summary, key=lambda x: x['pass_rate'], reverse=True):
+                ma_indicator = " (MA detrended)" if result['ma_detrended'] else ""
+                print(f"  {result['variable']:20} | {result['transformation']:10} | {result['pass_rate']:5.1%} | {result['status']}{ma_indicator}")
+        
+        # Count problematic variables
+        poor_vars = [r for r in baseline_summary if r['pass_rate'] < 0.70]
+        if poor_vars:
+            print(f"\n⚠️  Variables with concerning pass rates (<70%): {len(poor_vars)}")
+            for var in poor_vars:
+                print(f"    - {var['variable']} ({var['pass_rate']:.1%})")
+        else:
+            print(f"\n✅ All variables achieved good stationarity pass rates (≥70%)")
+            
+        print(f"\nTotal variables tested: {len(summary_results)}")
+        print(f"Total country-variable combinations: {len(final_stationarity_results)}")
+    
+    else:
+        print("No stationarity results to save!")
+
 def create_transformation_summary(transformation_decisions, output_dir):
     """Save transformation decisions to a summary file"""
     summary_file = f'{output_dir}/transformation_summary.txt'
@@ -449,9 +664,36 @@ def create_transformation_summary(transformation_decisions, output_dir):
             if isinstance(decision, dict) and 'recommended_transformation' in decision:
                 f.write(f"Variable: {var}\n")
                 f.write(f"  Transformation: {decision['recommended_transformation']}\n")
-                f.write(f"  Reason: {decision.get('reason', 'N/A')}\n")
-                f.write(f"  Stationarity p-value: {decision.get('stationarity_pvalue', 'N/A')}\n")
-                f.write(f"  Seasonality detected: {decision.get('seasonality_detected', 'N/A')}\n")
+                
+                # Format reason
+                reason = decision.get('reason', 'N/A')
+                f.write(f"  Reason: {reason}\n")
+                
+                # Format stationarity p-value
+                p_value = decision.get('stationarity_pvalue', np.nan)
+                if pd.isna(p_value):
+                    p_value_str = "N/A"
+                else:
+                    p_value_str = f"{p_value:.4f}"
+                f.write(f"  Stationarity p-value: {p_value_str}\n")
+                
+                # Format seasonality detection
+                seasonality = decision.get('seasonality_detected', False)
+                seasonality_str = "Yes" if seasonality else "No"
+                f.write(f"  Seasonality detected: {seasonality_str}\n")
+                
+                # Add negative values indicator
+                has_negative = decision.get('has_negative_values', False)
+                f.write(f"  Has negative values: {'Yes' if has_negative else 'No'}\n")
+                
+                # Add stationarity test results if available
+                if 'stationarity_tests' in decision and decision['stationarity_tests']:
+                    stat_results = decision['stationarity_tests']
+                    if 'stationary_ratio' in stat_results:
+                        f.write(f"  Stationarity pass rates:\n")
+                        for trans_type, ratio in stat_results['stationary_ratio'].items():
+                            f.write(f"    {trans_type}: {ratio:.1%}\n")
+                
                 f.write("\n")
     print(f"Transformation summary saved to: {summary_file}")
 
@@ -522,9 +764,17 @@ def main():
         for var in variables_to_detrend:
             apply_ma_detrending_to_variable(transformed_data, var, SCENARIOS, ma_window=3)
         
+        # --- Test final stationarity ---
+        print("\n" + "="*60)
+        print("STEP 4: TESTING FINAL STATIONARITY")
+        print("="*60)
+        
+        # Test stationarity of final transformed variables (including MA detrended ones)
+        test_final_stationarity(transformed_data, macro_vars, transformation_decisions, output_dir)
+        
         # --- Save final transformed data ---
         print("\n" + "="*60)
-        print("STEP 4: SAVING TRANSFORMED DATA")
+        print("STEP 5: SAVING TRANSFORMED DATA")
         print("="*60)
         
         # Save the transformed data

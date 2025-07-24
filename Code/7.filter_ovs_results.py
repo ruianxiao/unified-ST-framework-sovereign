@@ -60,6 +60,111 @@ print(f"Overlap (final filter): {len(OIL_DEPENDENT_COUNTRIES)} countries: {OIL_D
 print(f"Theoretical only: {sorted(set(THEORETICAL_OIL_DEPENDENT) - set(GCORR_OIL_DEPENDENT))}")
 print(f"GCorr Sovereign only: {sorted(set(GCORR_OIL_DEPENDENT) - set(THEORETICAL_OIL_DEPENDENT))}")
 
+# --- COMMODITY AND OIL EXPORTER/IMPORTER DEFINITIONS FOR SIGN CONSTRAINTS ---
+
+# Commodity Exporters (should have negative coefficients for Commodity Index)
+COMMODITY_EXPORTERS = [
+    'AUS', 'CHL', 'BRA', 'ZAF', 'PER', 'COL', 'ECU', 'BOL', 'URY', 'NZL', 'CAN', 'NOR', 'RUS', 'KAZ', 'MNG', 'TTO',
+    'SAU', 'ARE', 'KWT', 'QAT', 'BHR', 'OMN', 'DZA', 'NGA', 'AGO', 'GAB', 'TCD', 'GNQ', 'VEN', 'IRN', 'IRQ', 'AZE', 'IDN', 'MYS', 'BRN'
+]
+
+# Commodity Importers (should have positive coefficients for Commodity Index)
+COMMODITY_IMPORTERS = [
+    'JPN', 'KOR', 'CHN', 'IND', 'THA', 'VNM', 'PHL', 'PAK', 'BGD', 'LKA', 'CHE', 'DEU', 'FRA', 'ITA', 'ESP', 'GBR',
+    'NLD', 'BEL', 'AUT', 'DNK', 'SWE', 'FIN', 'PRT', 'IRL', 'LUX', 'GRC', 'CYP', 'MLT', 'SVN', 'SVK', 'EST', 'LVA',
+    'LTU', 'POL', 'CZE', 'HUN', 'HRV', 'BGR', 'ROU', 'TUR', 'ISR', 'SGP', 'HKG', 'TWN'
+]
+
+# Oil Exporters (should have negative coefficients for Oil Price)
+OIL_EXPORTERS = [
+    'SAU', 'ARE', 'KWT', 'QAT', 'BHR', 'OMN', 'NOR', 'RUS', 'VEN', 'ECU', 'COL', 'MEX', 'BRA', 'CAN', 'NGA', 'AGO',
+    'DZA', 'AZE', 'KAZ', 'TTO', 'GAB', 'TCD', 'GNQ', 'IRN', 'IRQ', 'LBY', 'IDN', 'MYS', 'BRN'
+]
+
+# Oil Importers (should have positive coefficients for Oil Price)
+OIL_IMPORTERS = [
+    'JPN', 'KOR', 'CHN', 'IND', 'THA', 'VNM', 'PHL', 'SGP', 'PAK', 'BGD', 'LKA', 'NPL', 'CHE', 'DEU', 'FRA', 'ITA',
+    'ESP', 'GBR', 'NLD', 'BEL', 'AUT', 'DNK', 'SWE', 'FIN', 'PRT', 'IRL', 'LUX', 'GRC', 'CYP', 'MLT', 'SVN', 'SVK',
+    'EST', 'LVA', 'LTU', 'POL', 'CZE', 'HUN', 'HRV', 'BGR', 'ROU', 'TUR', 'ISR', 'HKG', 'TWN'
+]
+
+def has_sign_constraint_violations(row, country):
+    """Check if model has sign constraint violations for commodity/oil variables"""
+    mv_cols = ['MV1', 'MV2', 'MV3', 'MV4']
+    coef_cols = ['MV1_coefficient', 'MV2_coefficient', 'MV3_coefficient', 'MV4_coefficient']
+    
+    for mv_col, coef_col in zip(mv_cols, coef_cols):
+        if mv_col in row.index and pd.notna(row[mv_col]) and coef_col in row.index and pd.notna(row[coef_col]):
+            var_name = row[mv_col].split('_lag')[0] if '_lag' in row[mv_col] else row[mv_col]
+            coef = row[coef_col]
+            
+            # Commodity Index constraints
+            if 'Commodity Index' in var_name:
+                if country in COMMODITY_EXPORTERS and coef > 0:  # Should be negative
+                    return True
+                if country in COMMODITY_IMPORTERS and coef < 0:  # Should be positive
+                    return True
+            
+            # Oil Price constraints
+            if 'Oil Price' in var_name:
+                if country in OIL_EXPORTERS and coef > 0:  # Should be negative
+                    return True
+                if country in OIL_IMPORTERS and coef < 0:  # Should be positive
+                    return True
+    
+    return False
+
+def contains_oil_price_for_importers(row, country):
+    """Check if oil importer country has Oil Price in their model (should exclude)"""
+    if country not in OIL_IMPORTERS:
+        return False  # Not an oil importer, no restriction
+    
+    mv_cols = ['MV1', 'MV2', 'MV3', 'MV4']
+    for col in mv_cols:
+        if col in row.index and pd.notna(row[col]):
+            var_name = row[col].split('_lag')[0] if '_lag' in row[col] else row[col]
+            if 'Oil Price' in var_name:
+                return True
+    return False
+
+def contains_commodity_index_for_importers(row, country):
+    """Check if commodity importer country has Commodity Index in their model (should exclude)"""
+    if country not in COMMODITY_IMPORTERS:
+        return False  # Not a commodity importer, no restriction
+    
+    mv_cols = ['MV1', 'MV2', 'MV3', 'MV4']
+    for col in mv_cols:
+        if col in row.index and pd.notna(row[col]):
+            var_name = row[col].split('_lag')[0] if '_lag' in row[col] else row[col]
+            if 'Commodity Index' in var_name:
+                return True
+    return False
+
+def has_inconsistent_net_exports_coefficient(row, country):
+    """Check if Net Exports coefficient is inconsistent with country trade characteristics"""
+    mv_cols = ['MV1', 'MV2', 'MV3', 'MV4']
+    coef_cols = ['MV1_coefficient', 'MV2_coefficient', 'MV3_coefficient', 'MV4_coefficient']
+    
+    for mv_col, coef_col in zip(mv_cols, coef_cols):
+        if (mv_col in row.index and pd.notna(row[mv_col]) and 
+            coef_col in row.index and pd.notna(row[coef_col])):
+            var_name = row[mv_col].split('_lag')[0] if '_lag' in row[mv_col] else row[mv_col]
+            coef = row[coef_col]
+            
+            if 'Net Exports' in var_name:
+                # Countries that can sustainably run trade deficits
+                flexible_countries = ['USA', 'GBR']  
+                
+                if country in flexible_countries:
+                    return False  # No restriction for these countries
+                else:
+                    # For most countries, Net Exports should have NEGATIVE coefficient
+                    # (higher net exports = lower sovereign risk = lower PD = negative dlnPD)
+                    if coef > 0:
+                        return True  # Inconsistent - exclude this model
+    
+    return False
+
 def get_mv_base_names(mv_columns):
     """Extract base macro variable names from MV columns, ignoring lags"""
     base_names = set()
@@ -229,6 +334,11 @@ def filter_ovs_results_consolidated(
     - Different MV combinations for lagged models
     - At least one no-lag model when available
     - Results sorted by adj_r2 with has_no_lags indicator
+    
+    New economic consistency filters (always applied):
+    - Oil importers cannot have Oil Price in their models
+    - Commodity importers cannot have Commodity Index in their models  
+    - Net Exports coefficient must be negative (except USA/GBR which are flexible)
     """
     
     # Load OVS results
@@ -292,10 +402,10 @@ def filter_ovs_results_consolidated(
             country_results['has_oil_price'] = country_results.apply(contains_oil_price, axis=1)
             country_results = country_results[country_results['has_oil_price']]
         
-        # Filter 5: Advanced - Exclude models with both Net Exports and Commodity Index (conditional)
-        if apply_advanced_rules:
-            country_results['has_both_netexp_commodity'] = country_results.apply(contains_both_net_exports_and_commodity, axis=1)
-            country_results = country_results[~country_results['has_both_netexp_commodity']]
+        # # Filter 5: Advanced - Exclude models with both Net Exports and Commodity Index (conditional)
+        # if apply_advanced_rules:
+        #     country_results['has_both_netexp_commodity'] = country_results.apply(contains_both_net_exports_and_commodity, axis=1)
+        #     country_results = country_results[~country_results['has_both_netexp_commodity']]
         
         # Filter 6: Advanced - Exclude models with Government 10Y Bond Rate (conditional)
         if apply_advanced_rules:
@@ -306,6 +416,18 @@ def filter_ovs_results_consolidated(
         if apply_advanced_rules:
             country_results['has_inflation'] = country_results.apply(contains_inflation, axis=1)
             country_results = country_results[~country_results['has_inflation']]
+        
+        # Filter 8: Oil importers should not have Oil Price in their models
+        country_results['oil_price_for_importer'] = country_results.apply(lambda row: contains_oil_price_for_importers(row, country), axis=1)
+        country_results = country_results[~country_results['oil_price_for_importer']]
+        
+        # Filter 9: Commodity importers should not have Commodity Index in their models
+        country_results['commodity_for_importer'] = country_results.apply(lambda row: contains_commodity_index_for_importers(row, country), axis=1)
+        country_results = country_results[~country_results['commodity_for_importer']]
+        
+        # Filter 10: Exclude models with inconsistent Net Exports coefficients
+        country_results['inconsistent_net_exports'] = country_results.apply(lambda row: has_inconsistent_net_exports_coefficient(row, country), axis=1)
+        country_results = country_results[~country_results['inconsistent_net_exports']]
         
         if len(country_results) == 0:
             country_stats[country] = {

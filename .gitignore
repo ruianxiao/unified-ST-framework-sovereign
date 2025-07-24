@@ -1,58 +1,42 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+# Ignore everything at the root level
+*
 
-# Input data files (sensitive)
-Input/
-*.csv
-*.xlsx
-*.xls
+# But don't ignore the Code folder
+!Code/
 
-# Output files
-Output/
-Plot/
+# Don't ignore anything inside the Code folder
+!Code/**
 
-# PowerPoint files
-*.pptx
-*.ppt
+# However, still ignore these patterns even inside Code folder
+Code/__pycache__/
+Code/**/__pycache__/
+Code/*.py[cod]
+Code/**/*.py[cod]
+Code/*$py.class
+Code/**/*$py.class
+Code/*.so
+Code/**/*.so
 
-# IDE specific files
-.idea/
-.vscode/
-*.swp
-*.swo
+# Ignore Jupyter checkpoints even in Code folder
+Code/.ipynb_checkpoints
+Code/**/.ipynb_checkpoints
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Ignore IDE files even in Code folder
+Code/.idea/
+Code/**/.idea/
+Code/.vscode/
+Code/**/.vscode/
+Code/*.swp
+Code/**/*.swp
+Code/*.swo
+Code/**/*.swo
 
-# Environment
-.env
-.venv
-venv/
-ENV/
+# Ignore OS specific files even in Code folder
+Code/.DS_Store
+Code/**/.DS_Store
+Code/Thumbs.db
+Code/**/Thumbs.db
 
-# Logs
-*.log
-
-# OS specific
-.DS_Store
-Thumbs.db 
+# Ignore log files even in Code folder
+Code/*.log
+Code/**/*.log 
