@@ -11,6 +11,7 @@ HISTORICAL_DATA_FILE = 'Output/4.transformation/transformed_data.csv'
 OVS_FORECAST_DIR = Path('Output/8.scenario_forecast')
 GCORR_FORECAST_DIR = Path('gcorr-research-delivery-validation/Output/gcorr_scenario_plots/annualized_data')
 FORECAST_START = '2025-07-01'
+GCORR_FORECAST_QUARTERS = 40  # Number of GCorr forecast quarters (20 or 40)
 
 # Output directories
 OUTPUT_DIR = Path('Output/9.ovs_gcorr_comparison')
@@ -21,8 +22,8 @@ PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 # Model combinations to use from OVS
 OVS_COMBINATIONS = {
     'ovs_historical': 'advanced_has_no_lags',  # OVS trained on historical data only
-    'ovs_gcorr_unsmoothed': 'advanced_gcorr40q_has_no_lags',  # OVS trained on GCorr unsmoothed data
-    'ovs_gcorr_smoothed': 'advanced_gcorr40q_smoothed_has_no_lags'  # OVS trained on GCorr smoothed data
+    'ovs_gcorr_unsmoothed': f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q_has_no_lags',  # OVS trained on GCorr unsmoothed data
+    'ovs_gcorr_smoothed': f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed_has_no_lags'  # OVS trained on GCorr smoothed data
 }
 
 # GCorr data types to compare
@@ -142,35 +143,24 @@ def get_country_metadata(country):
     """Get metadata about the country from both models"""
     metadata = {'country': country}
     
-    # Get OVS metadata from step 7 filtered results files
+    # Get OVS metadata from step 7 final top models files
     try:
         ovs_combinations_map = {
             'ovs_historical': 'advanced',
-            'ovs_gcorr_unsmoothed': 'advanced_gcorr40q',
-            'ovs_gcorr_smoothed': 'advanced_gcorr40q_smoothed'
+            'ovs_gcorr_unsmoothed': f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q',
+            'ovs_gcorr_smoothed': f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed'
         }
         
         for ovs_type, file_suffix in ovs_combinations_map.items():
-            ovs_detailed_file = Path(f'Output/7.filtered_ovs_results/filtered_ovs_results_{file_suffix}.csv')
+            ovs_detailed_file = Path(f'Output/7.filtered_ovs_results/final_top_models_{file_suffix}.csv')
             if ovs_detailed_file.exists():
                 ovs_detailed = pd.read_csv(ovs_detailed_file)
                 country_results = ovs_detailed[ovs_detailed['country'] == country]
                 if not country_results.empty:
-                    # Apply has_no_lags filter to match scenario forecast script behavior
-                    if 'has_no_lags' in country_results.columns:
-                        has_no_lags_models = country_results[country_results['has_no_lags'] == True]
-                        if not has_no_lags_models.empty:
-                            # Get the best has_no_lags model (lowest rank)
-                            best_model = has_no_lags_models.loc[has_no_lags_models['rank_in_country'].idxmin()]
-                        else:
-                            # Fallback to first model if no has_no_lags models available
-                            best_model = country_results.iloc[0]
-                            print(f"  Warning: No has_no_lags models for {country} in {file_suffix}, using rank 1 model")
-                    else:
-                        # Fallback if has_no_lags column doesn't exist
-                        best_model = country_results.iloc[0]
+                    # Final top models files already contain the selected top model per country
+                    best_model = country_results.iloc[0]
                     
-                    # Get adjusted R² from the filtered results
+                    # Get adjusted R² from the final top models results
                     metadata[f'{ovs_type}_adj_r2'] = best_model.get('adj_r2')
                     
                     # Extract MV variables and coefficients
@@ -238,9 +228,20 @@ def create_comparison_plots(country, historical_data, ovs_forecasts, gcorr_forec
 def create_single_comparison_plot(country, gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, metadata):
     """Create comparison plot for a country with consistent scaling for specific GCorr type"""
     
-    # Set up the plot
-    fig, axes = plt.subplots(2, 2, figsize=(20, 12))
-    fig.suptitle(f'OVS vs GCorr Forecast Comparison: {country} ({gcorr_type.capitalize()})', fontsize=16, y=0.98)
+    # Set larger font sizes for all plot elements
+    plt.rcParams.update({
+        'font.size': 18,           # Base font size
+        'axes.titlesize': 22,      # Subplot titles
+        'axes.labelsize': 22,      # Axis labels (increased)
+        'xtick.labelsize': 18,     # X-axis tick labels (increased)
+        'ytick.labelsize': 18,     # Y-axis tick labels (increased)
+        'legend.fontsize': 18,     # Legend text (increased)
+        'figure.titlesize': 24     # Main title
+    })
+    
+    # Set up the plot with larger figure size
+    fig, axes = plt.subplots(2, 2, figsize=(24, 16))
+    fig.suptitle(f'OVS vs GCorr Forecast Comparison: {country} ({gcorr_type.capitalize()})', fontsize=24, y=0.96)
     
     # Define colors for models (consistent across all scenarios)
     model_colors = {
@@ -325,54 +326,27 @@ def create_single_comparison_plot(country, gcorr_type, historical_data, ovs_fore
     ax4 = axes[1, 1]
     plot_scenario_comparison(ax4, 'S4', gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, model_colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot)
     
-    # Helper function to safely format numeric values
-    def safe_format(value, format_str, default='N/A'):
-        if value is None or value == 'N/A' or pd.isna(value):
-            return default
-        try:
-            return format_str.format(value)
-        except (ValueError, TypeError):
-            return default
-    
-    # Add metadata text with MV variable information
-    hist_adj_r2 = safe_format(metadata.get('ovs_historical_adj_r2'), '{:.3f}')
-    hist_text = f"OVS (Historical): Adj R² = {hist_adj_r2}\n" \
-                f"  MV Variables: {metadata.get('ovs_historical_mv_info', 'N/A')}\n"
-    
-    # Add metadata for GCorr-trained OVS models
-    if gcorr_type == 'unsmoothed':
-        gcorr_adj_r2 = safe_format(metadata.get('ovs_gcorr_unsmoothed_adj_r2'), '{:.3f}')
-        gcorr_ovs_text = f"OVS (GCorr Unsmoothed): Adj R² = {gcorr_adj_r2}\n" \
-                        f"  MV Variables: {metadata.get('ovs_gcorr_unsmoothed_mv_info', 'N/A')}\n"
-    else:
-        gcorr_adj_r2 = safe_format(metadata.get('ovs_gcorr_smoothed_adj_r2'), '{:.3f}')
-        gcorr_ovs_text = f"OVS (GCorr Smoothed): Adj R² = {gcorr_adj_r2}\n" \
-                        f"  MV Variables: {metadata.get('ovs_gcorr_smoothed_mv_info', 'N/A')}\n"
-    
-    gcorr_rsq = safe_format(metadata.get('gcorr_rsq'), '{:.3f}')
-    gcorr_text = f"GCorr: R² = {gcorr_rsq}, " \
-                f"MV = {metadata.get('gcorr_mv_variables', 'N/A')}"
-    
-    metadata_text = hist_text + gcorr_ovs_text + gcorr_text
-    
-    fig.text(0.02, 0.02, metadata_text, fontsize=10, 
-             bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.5))
-    
     plt.tight_layout()
-    plt.subplots_adjust(top=0.93, bottom=0.15)
+    plt.subplots_adjust(top=0.92, bottom=0.08)
     
     # Save plot
     plt.savefig(PLOTS_DIR / f'ovs_gcorr_{country}_{gcorr_type}.png', dpi=300, bbox_inches='tight')
     plt.close()
+    
+    # Reset matplotlib rcParams to defaults
+    plt.rcdefaults()
     
     print(f"  Saved comparison plot for {country} ({gcorr_type})")
 
 def plot_scenario_comparison(ax, scenario, gcorr_type, historical_data, ovs_forecasts, gcorr_forecasts, model_colors, scenario_mapping, last_hist_date, last_hist_pd, y_min_plot, y_max_plot):
     """Plot comparison for a specific scenario with consistent y-axis scaling"""
     
-    # Plot historical data
+    # Define cutoff date - only show forecasts up to 2040
+    cutoff_date = pd.Timestamp('2040-12-31')
+    
+    # Plot historical data (convert to percentage)
     if historical_data is not None and not historical_data.empty:
-        ax.plot(historical_data['yyyyqq'], historical_data['historical_pd'], 
+        ax.plot(historical_data['yyyyqq'], historical_data['historical_pd'] * 100, 
                 color=model_colors['historical'], linewidth=2, label='Historical', alpha=0.7)
     
     # Define labels and line styles for different OVS types
@@ -402,14 +376,16 @@ def plot_scenario_comparison(ax, scenario, gcorr_type, historical_data, ovs_fore
         ovs_col = f'{ovs_type}_PD_{scenario}'
         if ovs_col in ovs_data.columns:
             ovs_forecast = ovs_data[ovs_data[ovs_col].notna()]
+            # Filter to only show forecasts up to 2040
+            ovs_forecast = ovs_forecast[ovs_forecast['yyyyqq'] <= cutoff_date]
             if not ovs_forecast.empty:
-                # Connect to historical if available
+                # Connect to historical if available (convert to percentage)
                 if last_hist_date is not None and last_hist_pd is not None:
                     plot_dates = [last_hist_date] + ovs_forecast['yyyyqq'].tolist()
-                    plot_values = [last_hist_pd] + ovs_forecast[ovs_col].tolist()
+                    plot_values = [last_hist_pd * 100] + (ovs_forecast[ovs_col] * 100).tolist()
                 else:
                     plot_dates = ovs_forecast['yyyyqq']
-                    plot_values = ovs_forecast[ovs_col]
+                    plot_values = ovs_forecast[ovs_col] * 100
                 
                 ax.plot(plot_dates, plot_values, 
                         color=model_colors[ovs_type], linestyle=ovs_line_styles[ovs_type], linewidth=2.5, alpha=0.9,
@@ -422,27 +398,37 @@ def plot_scenario_comparison(ax, scenario, gcorr_type, historical_data, ovs_fore
         gcorr_col = f'gcorr_{gcorr_type}_PD_{gcorr_scenario}'
         if gcorr_col in gcorr_data.columns:
             gcorr_forecast = gcorr_data[gcorr_data[gcorr_col].notna()]
+            # Filter to only show forecasts up to 2040
+            gcorr_forecast = gcorr_forecast[gcorr_forecast['yyyyqq'] <= cutoff_date]
             if not gcorr_forecast.empty:
-                # Connect to historical if available
+                # Connect to historical if available (convert to percentage)
                 if last_hist_date is not None and last_hist_pd is not None:
                     plot_dates = [last_hist_date] + gcorr_forecast['yyyyqq'].tolist()
-                    plot_values = [last_hist_pd] + gcorr_forecast[gcorr_col].tolist()
+                    plot_values = [last_hist_pd * 100] + (gcorr_forecast[gcorr_col] * 100).tolist()
                 else:
                     plot_dates = gcorr_forecast['yyyyqq']
-                    plot_values = gcorr_forecast[gcorr_col]
+                    plot_values = gcorr_forecast[gcorr_col] * 100
                 
                 gcorr_color_key = f'gcorr_{gcorr_type}'
                 ax.plot(plot_dates, plot_values, 
                         color=model_colors[gcorr_color_key], linestyle='--', linewidth=3, alpha=0.9,
                         label=f'GCorr ({gcorr_type.capitalize()})')
     
-    # Formatting
-    ax.axvline(pd.to_datetime(FORECAST_START), color='gray', linestyle=':', alpha=0.5)
-    ax.set_title(f'{scenario} Scenario')
-    ax.set_ylabel('PD')
-    ax.legend(fontsize=8)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(y_min_plot, y_max_plot)  # Apply consistent y-axis limits
+    # Formatting with larger fonts
+    ax.axvline(pd.to_datetime(FORECAST_START), color='gray', linestyle=':', alpha=0.5, linewidth=2)
+    ax.set_title(f'{scenario} Scenario', fontsize=22, fontweight='bold')
+    ax.set_ylabel('PD (%)', fontsize=22, fontweight='bold')
+    # Remove x-axis title as requested
+    ax.legend(fontsize=18, loc='best')
+    ax.grid(True, alpha=0.3, linewidth=1)
+    ax.set_ylim(y_min_plot * 100, y_max_plot * 100)  # Apply consistent y-axis limits (convert to percentage)
+    ax.set_xlim(left=None, right=cutoff_date)  # Limit x-axis to 2040
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    
+    # Rotate x-axis labels for better readability
+    for label in ax.get_xticklabels():
+        label.set_rotation(45)
+        label.set_ha('right')
 
 def calculate_forecast_differences(ovs_forecasts, gcorr_forecasts):
     """Calculate differences between OVS and GCorr forecasts"""
@@ -527,6 +513,453 @@ def create_summary_table(all_results):
         summary_data.append(summary_record)
     
     return pd.DataFrame(summary_data)
+
+def get_regional_classifications():
+    """Get regional country classifications matching generate_report_tables.py"""
+    return {
+        'Advanced Europe': [
+            'AUT', 'BEL', 'CHE', 'DEU', 'DNK', 'ESP', 'FIN', 'FRA', 
+            'GBR', 'IRL', 'ITA', 'LUX', 'NLD', 'NOR', 'SWE'
+        ],
+        'North America': ['CAN', 'USA'],
+        'Asia-Pacific': [
+            'AUS', 'CHN', 'HKG', 'IND', 'JPN', 'KOR', 'NZL', 'PAK', 
+            'PHL', 'SGP', 'THA', 'BGD', 'LKA', 'TWN', 'VNM', 'IDN', 'MYS'
+        ],
+        'Latin America': ['BRA', 'CHL', 'COL', 'MEX', 'PER', 'DOM', 'JAM', 'PAN'],
+        'Middle East/Africa': ['BHR', 'ISR', 'KAZ', 'NGA', 'OMN', 'QAT', 'ZAF', 'EGY', 'MAR', 'TUN'],
+        'Emerging Europe': [
+            'BGR', 'CYP', 'CZE', 'EST', 'GRC', 'HRV', 'HUN', 'LTU', 
+            'LVA', 'MLT', 'POL', 'PRT', 'ROU', 'SVK', 'SVN', 'TUR'
+        ]
+    }
+
+def generate_scenario_projection_table(all_results, historical_data):
+    """Generate comprehensive scenario projection table including historical crisis periods and model forecasts"""
+    print("\n🔄 Generating Scenario Projection Table (Table 4.2)...")
+    
+    scenario_analysis = []
+    
+    # Define all model types we're analyzing
+    model_types = {
+        'OVS Historical': 'ovs_historical',
+        'OVS GCorr Unsmoothed': 'ovs_gcorr_unsmoothed', 
+        'OVS GCorr Smoothed': 'ovs_gcorr_smoothed',
+        'GCorr Unsmoothed': 'gcorr_unsmoothed',
+        'GCorr Smoothed': 'gcorr_smoothed'
+    }
+    
+    # Define scenarios to analyze (baseline needed for calculations but not included in final table)
+    scenarios_for_calculation = ['Baseline', 'S1', 'S3', 'S4']
+    scenarios_for_output = ['S1', 'S3', 'S4']  # Exclude baseline from final table
+    
+    # Calculate non-crisis historical baseline for reference
+    if historical_data is not None:
+        # Filter to exclude Serbia only
+        historical_data = historical_data[historical_data['cinc'] != 'SRB'].copy()
+        
+        # Define crisis periods to exclude from baseline calculation
+        crisis_periods = [
+            (pd.Timestamp('2008-01-01'), pd.Timestamp('2009-12-31')),  # GFC
+            (pd.Timestamp('2010-01-01'), pd.Timestamp('2012-12-31')),  # European Crisis
+            (pd.Timestamp('2020-01-01'), pd.Timestamp('2021-12-31'))   # COVID
+        ]
+        
+        # Create mask for all crisis periods
+        crisis_mask = pd.Series(False, index=historical_data.index)
+        for start_date, end_date in crisis_periods:
+            period_mask = (
+                (historical_data['yyyyqq'] >= start_date) & 
+                (historical_data['yyyyqq'] <= end_date)
+            )
+            crisis_mask = crisis_mask | period_mask
+        
+        # Calculate non-crisis baseline
+        non_crisis_data = historical_data[~crisis_mask & historical_data['cdsiedf5'].notna()]
+        historical_baseline_pd = non_crisis_data['cdsiedf5'].mean() if not non_crisis_data.empty else np.nan
+        print(f"  📊 Historical non-crisis baseline: {historical_baseline_pd*10000:.1f} bps")
+        
+        # Add historical crisis analysis to the scenario table
+        print("  📊 Adding historical crisis periods to analysis...")
+        crisis_info = {
+            'Global Financial Crisis': ('2008-2009', pd.Timestamp('2008-01-01'), pd.Timestamp('2009-12-31')),
+            'European Debt Crisis': ('2010-2012', pd.Timestamp('2010-01-01'), pd.Timestamp('2012-12-31')),
+            'COVID-19 Pandemic': ('2020-2021', pd.Timestamp('2020-01-01'), pd.Timestamp('2021-12-31'))
+        }
+        
+        for crisis_name, (period_desc, start_date, end_date) in crisis_info.items():
+            crisis_data = historical_data[
+                (historical_data['yyyyqq'] >= start_date) & 
+                (historical_data['yyyyqq'] <= end_date) &
+                historical_data['cdsiedf5'].notna()
+            ].copy()
+            
+            if not crisis_data.empty:
+                # Calculate country-specific peaks (consistent with scenario methodology)
+                country_peaks = []
+                for country in crisis_data['cinc'].unique():
+                    if country == 'SRB':  # Exclude Serbia only
+                        continue
+                    country_crisis_data = crisis_data[crisis_data['cinc'] == country]
+                    if len(country_crisis_data) > 0:
+                        country_peak = country_crisis_data['cdsiedf5'].max()
+                        country_peaks.append(country_peak)
+                
+                if country_peaks:
+                    # Calculate average of country-specific peaks
+                    avg_crisis_peak = np.mean(country_peaks)
+                    peak_to_baseline_ratio = avg_crisis_peak / historical_baseline_pd if historical_baseline_pd > 0 else np.nan
+                    
+                    scenario_analysis.append({
+                        'Model_Type': f'Historical Crisis: {crisis_name}',
+                        'Scenario': period_desc,
+                        'Countries_Analyzed': len(country_peaks),
+                        'Avg_PD_bps': round(avg_crisis_peak * 10000, 1),
+                        'Stress_Ratio': round(peak_to_baseline_ratio, 2)  # Peak vs historical baseline for crisis periods
+                    })
+                    
+                    print(f"    ✅ {crisis_name}: {avg_crisis_peak*10000:.1f} bps avg peak across {len(country_peaks)} countries")
+        
+    else:
+        historical_baseline_pd = np.nan  # Default fallback
+    
+    # Process each model type
+    for model_name, model_key in model_types.items():
+        print(f"    📊 Processing {model_name}...")
+        
+        # Collect data for this model across all countries (including baseline for calculations)
+        model_scenario_data = {scenario: [] for scenario in scenarios_for_calculation}
+        countries_with_data = []
+        
+        for country, result in all_results.items():
+            if country == 'SRB':  # Exclude Serbia only
+                continue
+                
+            # Determine data source based on model type
+            if model_key.startswith('ovs_'):
+                # OVS model data
+                if not result['has_ovs']:
+                    continue
+                    
+                # Load OVS forecast data for this country
+                ovs_forecasts = load_ovs_forecasts(country)
+                model_data = ovs_forecasts.get(model_key)
+                
+                if model_data is not None:
+                    countries_with_data.append(country)
+                    
+                    for scenario in scenarios_for_calculation:
+                        pd_col = f'{model_key}_PD_{scenario}'
+                        if pd_col in model_data.columns:
+                            scenario_values = model_data[pd_col].dropna()
+                            if not scenario_values.empty:
+                                # Use country-specific peak (max value) for scenario
+                                country_peak = scenario_values.max()
+                                model_scenario_data[scenario].append(country_peak)
+                            
+            elif model_key.startswith('gcorr_'):
+                # GCorr model data
+                if not result['has_gcorr']:
+                    continue
+                    
+                gcorr_type = model_key.replace('gcorr_', '')  # 'unsmoothed' or 'smoothed'
+                gcorr_forecasts = load_gcorr_forecasts(country)
+                model_data = gcorr_forecasts.get(gcorr_type)
+                
+                if model_data is not None:
+                    countries_with_data.append(country)
+                    
+                    scenario_mapping = {
+                        'Baseline': 'baseline',
+                        'S1': 'S1', 
+                        'S3': 'S3',
+                        'S4': 'S4'
+                    }
+                    
+                    for scenario in scenarios_for_calculation:
+                        gcorr_scenario = scenario_mapping[scenario]
+                        pd_col = f'gcorr_{gcorr_type}_PD_{gcorr_scenario}'
+                        if pd_col in model_data.columns:
+                            scenario_values = model_data[pd_col].dropna()
+                            if not scenario_values.empty:
+                                # Use country-specific peak (max value) for scenario
+                                country_peak = scenario_values.max()
+                                model_scenario_data[scenario].append(country_peak)
+        
+        # Calculate scenario statistics for this model
+        unique_countries = len(set(countries_with_data))
+        
+        if unique_countries > 0:
+            # Calculate baseline average for ratio calculations
+            baseline_peaks = model_scenario_data.get('Baseline', [])
+            model_baseline_avg = np.mean(baseline_peaks) if baseline_peaks else historical_baseline_pd
+            
+            # Only process scenarios for output (excluding baseline) 
+            for rank, scenario in enumerate(scenarios_for_output, 1):
+                country_peaks = model_scenario_data[scenario]
+                
+                if country_peaks:
+                    # Calculate average of country-specific peaks
+                    avg_scenario_pd = np.mean(country_peaks)
+                    
+                    # For stress scenarios (S1, S3, S4), compare to model baseline
+                    vs_baseline_ratio = avg_scenario_pd / model_baseline_avg if model_baseline_avg > 0 else 1
+                    
+                    scenario_info = {
+                        'Model_Type': model_name,
+                        'Scenario': scenario,
+                        'Countries_Analyzed': len(country_peaks),
+                        'Avg_PD_bps': round(avg_scenario_pd * 10000, 1),
+                        'Stress_Ratio': round(vs_baseline_ratio, 2)
+                    }
+                    
+                    scenario_analysis.append(scenario_info)
+                    print(f"      ✅ {scenario}: {avg_scenario_pd*10000:.1f} bps avg across {len(country_peaks)} countries")
+        else:
+            print(f"      ⚠️ No data available for {model_name}")
+    
+    if scenario_analysis:
+        scenario_df = pd.DataFrame(scenario_analysis)
+        
+        # Save to CSV in Final_Report directory
+        output_path = Path('Final_Report/table_4_2_scenario_projections.csv')
+        output_path.parent.mkdir(exist_ok=True)
+        scenario_df.to_csv(output_path, index=False)
+        
+        print(f"  ✅ Saved scenario projections table: {output_path}")
+        print(f"  📊 Models analyzed: {len(scenario_df['Model_Type'].unique())}")
+        print(f"  📊 Total scenario projections: {len(scenario_df)}")
+        
+        return scenario_df
+    else:
+        print("  ⚠️ No scenario projection data available")
+        return None
+
+def generate_regional_scenario_projection_table(all_results, historical_data):
+    """Generate regional version of scenario projection table with stress ratios by region"""
+    print("\n🌍 Generating Regional Scenario Projection Table (Table 4.2 Regional)...")
+    
+    regional_scenario_analysis = []
+    regional_classifications = get_regional_classifications()
+    
+    # Define all model types we're analyzing
+    model_types = {
+        'OVS Historical': 'ovs_historical',
+        'OVS GCorr Unsmoothed': 'ovs_gcorr_unsmoothed', 
+        'OVS GCorr Smoothed': 'ovs_gcorr_smoothed',
+        'GCorr Unsmoothed': 'gcorr_unsmoothed',
+        'GCorr Smoothed': 'gcorr_smoothed'
+    }
+    
+    # Define scenarios to analyze (baseline needed for calculations but not included in final table)
+    scenarios_for_calculation = ['Baseline', 'S1', 'S3', 'S4']
+    scenarios_for_output = ['S1', 'S3', 'S4']  # Exclude baseline from final table
+    
+    # Calculate historical baseline for each region and add historical crisis analysis
+    regional_historical_baselines = {}
+    if historical_data is not None:
+        # Filter to exclude Serbia only
+        historical_data = historical_data[historical_data['cinc'] != 'SRB'].copy()
+        
+        # Define crisis periods to exclude from baseline calculation
+        crisis_periods = [
+            (pd.Timestamp('2008-01-01'), pd.Timestamp('2009-12-31')),  # GFC
+            (pd.Timestamp('2010-01-01'), pd.Timestamp('2012-12-31')),  # European Crisis
+            (pd.Timestamp('2020-01-01'), pd.Timestamp('2021-12-31'))   # COVID
+        ]
+        
+        # Create mask for all crisis periods
+        crisis_mask = pd.Series(False, index=historical_data.index)
+        for start_date, end_date in crisis_periods:
+            period_mask = (
+                (historical_data['yyyyqq'] >= start_date) & 
+                (historical_data['yyyyqq'] <= end_date)
+            )
+            crisis_mask = crisis_mask | period_mask
+        
+        # Calculate non-crisis baseline for each region
+        for region, countries in regional_classifications.items():
+            region_countries = [c for c in countries if c in historical_data['cinc'].unique()]
+            if region_countries:
+                region_data = historical_data[
+                    historical_data['cinc'].isin(region_countries) & 
+                    ~crisis_mask & 
+                    historical_data['cdsiedf5'].notna()
+                ]
+                regional_historical_baselines[region] = region_data['cdsiedf5'].mean() if not region_data.empty else 0.04
+                print(f"  📊 {region} historical baseline: {regional_historical_baselines[region]*10000:.1f} bps")
+            else:
+                regional_historical_baselines[region] = 0.04
+        
+        # Add regional historical crisis analysis to the scenario table
+        print("  📊 Adding regional historical crisis periods to analysis...")
+        crisis_info = {
+            'Global Financial Crisis': ('2008-2009', pd.Timestamp('2008-01-01'), pd.Timestamp('2009-12-31')),
+            'European Debt Crisis': ('2010-2012', pd.Timestamp('2010-01-01'), pd.Timestamp('2012-12-31')),
+            'COVID-19 Pandemic': ('2020-2021', pd.Timestamp('2020-01-01'), pd.Timestamp('2021-12-31'))
+        }
+        
+        for crisis_name, (period_desc, start_date, end_date) in crisis_info.items():
+            # Calculate crisis impact for each region
+            for region, countries in regional_classifications.items():
+                region_countries = [c for c in countries if c in historical_data['cinc'].unique()]
+                if region_countries:
+                    crisis_data = historical_data[
+                        (historical_data['yyyyqq'] >= start_date) & 
+                        (historical_data['yyyyqq'] <= end_date) &
+                        historical_data['cinc'].isin(region_countries) &
+                        historical_data['cdsiedf5'].notna()
+                    ].copy()
+                    
+                    if not crisis_data.empty:
+                        # Calculate country-specific peaks for this region
+                        country_peaks = []
+                        for country in region_countries:
+                            if country == 'SRB':  # Exclude Serbia only
+                                continue
+                            country_crisis_data = crisis_data[crisis_data['cinc'] == country]
+                            if len(country_crisis_data) > 0:
+                                country_peak = country_crisis_data['cdsiedf5'].max()
+                                country_peaks.append(country_peak)
+                        
+                        if country_peaks:
+                            # Calculate average of country-specific peaks for this region
+                            avg_crisis_peak = np.mean(country_peaks)
+                            regional_baseline = regional_historical_baselines.get(region, 0.04)
+                            peak_to_baseline_ratio = avg_crisis_peak / regional_baseline if regional_baseline > 0 else 1
+                            
+                            regional_scenario_analysis.append({
+                                'Region': region,
+                                'Model_Type': f'Historical Crisis: {crisis_name}',
+                                'Scenario': period_desc,
+                                'Countries_Analyzed': len(country_peaks),
+                                'Avg_PD_bps': round(avg_crisis_peak * 10000, 1),
+                                'Stress_Ratio': round(peak_to_baseline_ratio, 2)
+                            })
+                            
+                            print(f"    ✅ {region} {crisis_name}: {avg_crisis_peak*10000:.1f} bps avg peak across {len(country_peaks)} countries (ratio: {peak_to_baseline_ratio:.2f})")
+    
+    # Process each model type and region combination
+    for model_name, model_key in model_types.items():
+        print(f"    📊 Processing {model_name} by region...")
+        
+        # Process each region
+        for region, region_countries in regional_classifications.items():
+            # Collect data for this model and region across scenarios
+            region_scenario_data = {scenario: [] for scenario in scenarios_for_calculation}
+            countries_with_data = []
+            
+            for country in region_countries:
+                if country == 'SRB':  # Exclude Serbia only
+                    continue
+                    
+                if country not in all_results:
+                    continue
+                    
+                result = all_results[country]
+                
+                # Determine data source based on model type
+                if model_key.startswith('ovs_'):
+                    # OVS model data
+                    if not result['has_ovs']:
+                        continue
+                        
+                    # Load OVS forecast data for this country
+                    ovs_forecasts = load_ovs_forecasts(country)
+                    model_data = ovs_forecasts.get(model_key)
+                    
+                    if model_data is not None:
+                        countries_with_data.append(country)
+                        
+                        for scenario in scenarios_for_calculation:
+                            pd_col = f'{model_key}_PD_{scenario}'
+                            if pd_col in model_data.columns:
+                                scenario_values = model_data[pd_col].dropna()
+                                if not scenario_values.empty:
+                                    # Use country-specific peak (max value) for scenario
+                                    country_peak = scenario_values.max()
+                                    region_scenario_data[scenario].append(country_peak)
+                                
+                elif model_key.startswith('gcorr_'):
+                    # GCorr model data
+                    if not result['has_gcorr']:
+                        continue
+                        
+                    gcorr_type = model_key.replace('gcorr_', '')  # 'unsmoothed' or 'smoothed'
+                    gcorr_forecasts = load_gcorr_forecasts(country)
+                    model_data = gcorr_forecasts.get(gcorr_type)
+                    
+                    if model_data is not None:
+                        countries_with_data.append(country)
+                        
+                        scenario_mapping = {
+                            'Baseline': 'baseline',
+                            'S1': 'S1', 
+                            'S3': 'S3',
+                            'S4': 'S4'
+                        }
+                        
+                        for scenario in scenarios_for_calculation:
+                            gcorr_scenario = scenario_mapping[scenario]
+                            pd_col = f'gcorr_{gcorr_type}_PD_{gcorr_scenario}'
+                            if pd_col in model_data.columns:
+                                scenario_values = model_data[pd_col].dropna()
+                                if not scenario_values.empty:
+                                    # Use country-specific peak (max value) for scenario
+                                    country_peak = scenario_values.max()
+                                    region_scenario_data[scenario].append(country_peak)
+            
+            # Calculate scenario statistics for this model-region combination
+            unique_countries = len(set(countries_with_data))
+            
+            if unique_countries > 0:
+                # Calculate baseline average for ratio calculations
+                baseline_peaks = region_scenario_data.get('Baseline', [])
+                region_baseline_avg = np.mean(baseline_peaks) if baseline_peaks else regional_historical_baselines.get(region, 0.04)
+                
+                # Only process scenarios for output (excluding baseline) 
+                for scenario in scenarios_for_output:
+                    country_peaks = region_scenario_data[scenario]
+                    
+                    if country_peaks:
+                        # Calculate average of country-specific peaks for this region
+                        avg_scenario_pd = np.mean(country_peaks)
+                        
+                        # For stress scenarios (S1, S3, S4), compare to model baseline
+                        vs_baseline_ratio = avg_scenario_pd / region_baseline_avg if region_baseline_avg > 0 else 1
+                        
+                        scenario_info = {
+                            'Region': region,
+                            'Model_Type': model_name,
+                            'Scenario': scenario,
+                            'Countries_Analyzed': len(country_peaks),
+                            'Avg_PD_bps': round(avg_scenario_pd * 10000, 1),
+                            'Stress_Ratio': round(vs_baseline_ratio, 2)
+                        }
+                        
+                        regional_scenario_analysis.append(scenario_info)
+                        print(f"      ✅ {region} {scenario}: {avg_scenario_pd*10000:.1f} bps avg across {len(country_peaks)} countries")
+    
+    if regional_scenario_analysis:
+        regional_scenario_df = pd.DataFrame(regional_scenario_analysis)
+        
+        # Sort by Region, then Model_Type, then Scenario
+        regional_scenario_df = regional_scenario_df.sort_values(['Region', 'Model_Type', 'Scenario'])
+        
+        # Save to CSV in Final_Report directory
+        output_path = Path('Final_Report/table_4_2_regional_scenario_projections.csv')
+        output_path.parent.mkdir(exist_ok=True)
+        regional_scenario_df.to_csv(output_path, index=False)
+        
+        print(f"  ✅ Saved regional scenario projections table: {output_path}")
+        print(f"  🌍 Regions analyzed: {len(regional_scenario_df['Region'].unique())}")
+        print(f"  📊 Models analyzed: {len(regional_scenario_df['Model_Type'].unique())}")
+        print(f"  📊 Total regional scenario projections: {len(regional_scenario_df)}")
+        
+        return regional_scenario_df
+    else:
+        print("  ⚠️ No regional scenario projection data available")
+        return None
 
 def main():
     print("OVS vs GCorr Forecast Comparison")
@@ -641,6 +1074,12 @@ def main():
     # Create summary table
     summary_df = create_summary_table(all_results)
     summary_df.to_csv(OUTPUT_DIR / 'ovs_gcorr_comparison_summary.csv', index=False)
+    
+    # Generate scenario projection table (Table 4.2) using the loaded data
+    scenario_table = generate_scenario_projection_table(all_results, historical_data)
+    
+    # Generate regional scenario projection table (Table 4.2 Regional)
+    regional_scenario_table = generate_regional_scenario_projection_table(all_results, historical_data)
     
     # Print final summary
     print("\n" + "=" * 80)

@@ -8,6 +8,7 @@ warnings.filterwarnings('ignore')
 
 # Configuration
 HORIZON_QUARTERS = 4  # Focus on 4Q backtesting
+GCORR_FORECAST_QUARTERS = 40  # Number of GCorr forecast quarters (20 or 40)
 
 # Data paths
 OVS_BACKTESTING_DIR = Path('Output/8.backtesting_analysis')
@@ -22,8 +23,8 @@ PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 # Model configurations to compare (based on available backtesting results)
 OVS_MODELS = {
     'OVS_Historical': 'advanced',
-    'OVS_GCorr_Unsmoothed': 'advanced_gcorr40q',
-    'OVS_GCorr_Smoothed': 'advanced_gcorr40q_smoothed'
+    'OVS_GCorr_Unsmoothed': f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q',
+    'OVS_GCorr_Smoothed': f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed'
 }
 
 GCORR_MODELS = {
@@ -277,20 +278,20 @@ def get_model_metadata(country):
 def create_backtesting_comparison_plot(country, ovs_results, gcorr_results, metadata):
     """Create comparison plot for backtesting results"""
     
-    # Set larger font sizes for all plot elements
+    # Set much larger font sizes for all plot elements (Word document readability)
     plt.rcParams.update({
-        'font.size': 14,
-        'axes.titlesize': 16,
-        'axes.labelsize': 14,
-        'xtick.labelsize': 12,
-        'ytick.labelsize': 12,
-        'legend.fontsize': 12,
-        'figure.titlesize': 18
+        'font.size': 18,           # Base font size
+        'axes.titlesize': 20,      # Subplot titles
+        'axes.labelsize': 22,      # Axis labels (increased)
+        'xtick.labelsize': 18,     # X-axis tick labels (increased)
+        'ytick.labelsize': 18,     # Y-axis tick labels (increased)
+        'legend.fontsize': 22,     # Legend text (increased)
+        'figure.titlesize': 24     # Main title
     })
     
-    # Create figure with 1x2 subplots for focused comparisons
-    fig, axes = plt.subplots(1, 2, figsize=(24, 12))
-    fig.suptitle(f'Backtesting Results Comparison: {country} ({HORIZON_QUARTERS}Q Horizon)', fontsize=18, y=0.96)
+    # Create figure with larger size for better readability
+    fig, axes = plt.subplots(1, 2, figsize=(28, 14))
+    # Remove main title - information will be in subplot titles
     
     # Collect all data for consistent y-axis scaling
     all_pd_values = []
@@ -324,13 +325,15 @@ def create_backtesting_comparison_plot(country, ovs_results, gcorr_results, meta
     
     # Plot 1: Smoothed Models Comparison (OVS Historical vs OVS GCorr Smoothed vs GCorr Smoothed)
     ax1 = axes[0]
-    smoothed_stats = plot_methodology_comparison(ax1, 'Smoothed Models Comparison', all_models_data, 
+    smoothed_title = f'Backtesting Results: {country} ({HORIZON_QUARTERS}Q) - Smoothed Models'
+    smoothed_stats = plot_methodology_comparison(ax1, smoothed_title, all_models_data, 
                                                ['OVS_Historical', 'OVS_GCorr_Smoothed', 'GCorr_Smoothed'],
                                                y_min_plot, y_max_plot, metadata)
     
     # Plot 2: Unsmoothed Models Comparison (OVS Historical vs OVS GCorr Unsmoothed vs GCorr Unsmoothed)
     ax2 = axes[1]
-    unsmoothed_stats = plot_methodology_comparison(ax2, 'Unsmoothed Models Comparison', all_models_data, 
+    unsmoothed_title = f'Backtesting Results: {country} ({HORIZON_QUARTERS}Q) - Unsmoothed Models'
+    unsmoothed_stats = plot_methodology_comparison(ax2, unsmoothed_title, all_models_data, 
                                                  ['OVS_Historical', 'OVS_GCorr_Unsmoothed', 'GCorr_Unsmoothed'],
                                                  y_min_plot, y_max_plot, metadata)
     
@@ -338,14 +341,14 @@ def create_backtesting_comparison_plot(country, ovs_results, gcorr_results, meta
     country_stats = {**smoothed_stats, **unsmoothed_stats}
     
     plt.tight_layout()
-    plt.subplots_adjust(top=0.82, bottom=0.1)
+    plt.subplots_adjust(top=0.95, bottom=0.15)  # More space for charts since no main title
     
     # Save plot
     plt.savefig(PLOTS_DIR / f'backtesting_comparison_{country}_{HORIZON_QUARTERS}Q.png', 
                 dpi=300, bbox_inches='tight')
     plt.close()
     
-    # Reset matplotlib rcParams
+    # Reset matplotlib rcParams to defaults
     plt.rcdefaults()
     
     print(f"  Saved backtesting comparison plot for {country}")
@@ -364,16 +367,16 @@ def plot_methodology_comparison(ax, title, all_models_data, model_names, y_min_p
     
     if actual_data is None:
         ax.text(0.5, 0.5, f'No data available for {title}', 
-                transform=ax.transAxes, ha='center', va='center', fontsize=12)
-        ax.set_title(title, fontsize=16)
+                transform=ax.transAxes, ha='center', va='center', fontsize=18)
+        ax.set_title(title, fontsize=20, fontweight='bold')
         return {}
     
-    # Plot actual PD (handle missing values to show gaps)
+    # Plot actual PD (handle missing values to show gaps) - with thicker lines
     actual_pd_values = actual_data['cumulative_actual_PD'] * 100
     actual_pd_values = actual_pd_values.where(actual_pd_values.notna(), None)
     ax.plot(actual_data['forecast_start_date'], actual_pd_values, 
-            color='black', linestyle='--', linewidth=2, alpha=0.7,
-            label='Actual', marker='s', markersize=4)
+            color='black', linestyle='--', linewidth=3, alpha=0.8,
+            label='Actual', marker='s', markersize=8)
     
     # Plot each model's predictions and calculate statistics
     model_stats = {}
@@ -387,12 +390,12 @@ def plot_methodology_comparison(ax, title, all_models_data, model_names, y_min_p
             # Use different colors for each model
             color = MODEL_COLORS.get(model_name, 'blue')
             
-            # Handle missing values to show gaps in predicted PD
+            # Handle missing values to show gaps in predicted PD - with thicker lines
             predicted_pd_values = model_data['cumulative_predicted_PD'] * 100
             predicted_pd_values = predicted_pd_values.where(predicted_pd_values.notna(), None)
             ax.plot(model_data['forecast_start_date'], predicted_pd_values, 
-                    color=color, linestyle='-', linewidth=3, alpha=0.9,
-                    label=model_label, marker='o', markersize=6)
+                    color=color, linestyle='-', linewidth=4, alpha=0.9,
+                    label=model_label, marker='o', markersize=8)
             
             # Calculate statistics for non-missing data points
             mask = model_data['cumulative_predicted_PD'].notna() & model_data['cumulative_actual_PD'].notna()
@@ -417,15 +420,20 @@ def plot_methodology_comparison(ax, title, all_models_data, model_names, y_min_p
                 
                 stat_labels.append(f"{model_label}: Corr={corr:.3f}, MAPE={mape:.1f}%, RMSE={rmse:.4f}")
     
-    # Set title with statistics (one line per model)
+    # Set title with statistics (one line per model) - use larger fonts
     subtitle = '\n'.join(stat_labels)
-    ax.set_title(f'{title}\n{subtitle}', fontsize=14)
-    ax.set_xlabel('Forecast Start Date', fontsize=14)
-    ax.set_ylabel('Cumulative PD (%)', fontsize=14)
-    ax.legend(fontsize=12)
-    ax.grid(True, alpha=0.3)
+    ax.set_title(f'{title}\n{subtitle}', fontsize=22)
+    # Remove x-axis title as requested
+    ax.set_ylabel('Cumulative PD (%)', fontsize=22, fontweight='bold')
+    ax.legend(fontsize=22, loc='best')
+    ax.grid(True, alpha=0.3, linewidth=1)
     ax.set_ylim(y_min_plot * 100, y_max_plot * 100)
-    ax.tick_params(axis='both', which='major', labelsize=12)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    
+    # Rotate x-axis labels for better readability
+    for label in ax.get_xticklabels():
+        label.set_rotation(45)
+        label.set_ha('right')
     
     return model_stats
 
@@ -443,16 +451,16 @@ def plot_gcorr_comparison(ax, title, all_models_data, y_min_plot, y_max_plot, me
     
     if actual_data is None:
         ax.text(0.5, 0.5, 'No GCorr data available', 
-                transform=ax.transAxes, ha='center', va='center', fontsize=12)
-        ax.set_title(title, fontsize=16)
+                transform=ax.transAxes, ha='center', va='center', fontsize=18)
+        ax.set_title(title, fontsize=20, fontweight='bold')
         return {}
     
-    # Plot actual PD (handle missing values to show gaps)
+    # Plot actual PD (handle missing values to show gaps) - with thicker lines
     actual_pd_values = actual_data['cumulative_actual_PD'] * 100
     actual_pd_values = actual_pd_values.where(actual_pd_values.notna(), None)
     ax.plot(actual_data['forecast_start_date'], actual_pd_values, 
-            color='black', linestyle='--', linewidth=2, alpha=0.7,
-            label='Actual', marker='s', markersize=4)
+            color='black', linestyle='--', linewidth=3, alpha=0.8,
+            label='Actual', marker='s', markersize=8)
     
     # Plot GCorr predictions and calculate statistics
     model_stats = {}
@@ -463,12 +471,12 @@ def plot_gcorr_comparison(ax, title, all_models_data, y_min_plot, y_max_plot, me
             model_data = all_models_data[model_name]
             model_label = model_name.replace('_', ' ')
             
-            # Handle missing values to show gaps in predicted PD
+            # Handle missing values to show gaps in predicted PD - with thicker lines
             predicted_pd_values = model_data['cumulative_predicted_PD'] * 100
             predicted_pd_values = predicted_pd_values.where(predicted_pd_values.notna(), None)
             ax.plot(model_data['forecast_start_date'], predicted_pd_values, 
-                    color=MODEL_COLORS[model_name], linestyle='-', linewidth=3, alpha=0.9,
-                    label=model_label, marker='o', markersize=6)
+                    color=MODEL_COLORS[model_name], linestyle='-', linewidth=4, alpha=0.9,
+                    label=model_label, marker='o', markersize=8)
             
             # Calculate statistics for non-missing data points
             mask = model_data['cumulative_predicted_PD'].notna() & model_data['cumulative_actual_PD'].notna()
@@ -493,15 +501,20 @@ def plot_gcorr_comparison(ax, title, all_models_data, y_min_plot, y_max_plot, me
                 
                 stat_labels.append(f"{model_label}: Corr={corr:.3f}, MAPE={mape:.1f}%, RMSE={rmse:.4f}")
     
-    # Set title with statistics (one line per model)
+    # Set title with statistics (one line per model) - use larger fonts
     subtitle = '\n'.join(stat_labels)
-    ax.set_title(f'{title}\n{subtitle}', fontsize=14)
-    ax.set_xlabel('Forecast Start Date', fontsize=14)
-    ax.set_ylabel('Cumulative PD (%)', fontsize=14)
-    ax.legend(fontsize=12)
-    ax.grid(True, alpha=0.3)
+    ax.set_title(f'{title}\n{subtitle}', fontsize=22)
+    # Remove x-axis title as requested
+    ax.set_ylabel('Cumulative PD (%)', fontsize=22, fontweight='bold')
+    ax.legend(fontsize=22, loc='best')
+    ax.grid(True, alpha=0.3, linewidth=1)
     ax.set_ylim(y_min_plot * 100, y_max_plot * 100)
-    ax.tick_params(axis='both', which='major', labelsize=12)
+    ax.tick_params(axis='both', which='major', labelsize=18)
+    
+    # Rotate x-axis labels for better readability
+    for label in ax.get_xticklabels():
+        label.set_rotation(45)
+        label.set_ha('right')
     
     return model_stats
 

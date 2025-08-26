@@ -28,15 +28,16 @@ comparison_plots_dir_has_no_lags.mkdir(parents=True, exist_ok=True)
 DATA_PATH = 'Output/4.transformation/transformed_data.csv'
 OVS_RESULTS_DIR = Path('Output/6.ovs_variable_selection')
 FORECAST_START = '2025-07-01'  # 2025Q3
+GCORR_FORECAST_QUARTERS = 40  # Number of GCorr forecast quarters (20 or 40)
 
 # New configuration for multiple OVS sources and lag options
 OVS_SOURCES = {
     # 'original': 'Output/6.ovs_variable_selection/ovs_results.csv',
-    'advanced': 'Output/7.filtered_ovs_results/filtered_ovs_results_advanced.csv',
-    # 'original_gcorr40q': 'Output/6.ovs_variable_selection/ovs_results_gcorr40q.csv',
-    'advanced_gcorr40q': 'Output/7.filtered_ovs_results/filtered_ovs_results_advanced_gcorr40q.csv',
-    # 'original_gcorr40q_smoothed': 'Output/6.ovs_variable_selection/ovs_results_gcorr40q_smoothed.csv',
-    'advanced_gcorr40q_smoothed': 'Output/7.filtered_ovs_results/filtered_ovs_results_advanced_gcorr40q_smoothed.csv'
+    'advanced': 'Output/7.filtered_ovs_results/final_top_models_advanced.csv',
+    # 'original_gcorr': f'Output/6.ovs_variable_selection/ovs_results_gcorr{GCORR_FORECAST_QUARTERS}q.csv',
+    f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q': f'Output/7.filtered_ovs_results/final_top_models_advanced_gcorr{GCORR_FORECAST_QUARTERS}q.csv',
+    # 'original_gcorr_smoothed': f'Output/6.ovs_variable_selection/ovs_results_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed.csv',
+    f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed': f'Output/7.filtered_ovs_results/final_top_models_advanced_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed.csv'
 }
 
 LAG_OPTIONS = {
@@ -47,35 +48,24 @@ LAG_OPTIONS = {
 
 def get_top_model_for_country(country, ovs_source, lag_option='ignore_lags'):
     """
-    Helper function to get the top model for a country from OVS results.
+    Helper function to get the top model for a country from final top models files.
     Returns the model row or None if not found.
     """
     try:
         ovs_file_path = OVS_SOURCES[ovs_source]
         ovs_data = pd.read_csv(ovs_file_path)
         
-        if ovs_source in ['original', 'original_gcorr40q', 'original_gcorr40q_smoothed']:
-            # For original sources, get the top model by adj_r2
-            country_models = ovs_data[ovs_data['country'] == country]
+        # For final top models files, simply get the model for the country
+        # These files already contain only the selected top model per country
+        country_models = ovs_data[ovs_data['country'] == country]
+        
+        # Apply has_no_lags filter if requested and column exists
+        if lag_option == 'has_no_lags' and 'has_no_lags' in ovs_data.columns:
+            country_models = country_models[country_models['has_no_lags'] == True]
             
-            # Apply has_no_lags filter if requested
-            if lag_option == 'has_no_lags' and 'has_no_lags' in ovs_data.columns:
-                country_models = country_models[country_models['has_no_lags'] == True]
-                
-            if not country_models.empty:
-                return country_models.loc[country_models['adj_r2'].idxmax()]
-        else:
-            # For filtered results, first filter by country
-            country_models = ovs_data[ovs_data['country'] == country]
-            
-            # Apply has_no_lags filter if requested
-            if lag_option == 'has_no_lags' and 'has_no_lags' in ovs_data.columns:
-                country_models = country_models[country_models['has_no_lags'] == True]
-            
-            # Get the best model (lowest rank) from the filtered set
-            if not country_models.empty:
-                best_model = country_models.loc[country_models['rank_in_country'].idxmin()]
-                return best_model
+        if not country_models.empty:
+            # Return the first (and should be only) model for this country
+            return country_models.iloc[0]
         
         return None
         
@@ -202,30 +192,23 @@ def get_model_description_for_plotting(country, ovs_source, lag_option):
     return ' + '.join(clean_mv_names) if clean_mv_names else 'Model variables not available'
 
 def load_ovs_results(ovs_source='advanced', lag_option='ignore_lags'):
-    """Load OVS results and return top model for each country
+    """Load OVS results and return top model for each country from final top models files
     
     Args:
-        ovs_source: 'original', 'advanced', 'original_gcorr40q', 'advanced_gcorr40q', 
-                   'original_gcorr40q_smoothed', or 'advanced_gcorr40q_smoothed'
+        ovs_source: 'advanced', f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q', 
+                   or f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed'
         lag_option: 'ignore_lags' (ignore MV lags) or 'with_lags' (use MV lags)
     """
     ovs_results = {}  # Initialize the results dictionary
     
     # Get the appropriate OVS file path
-    if ovs_source in ['original', 'original_gcorr40q', 'original_gcorr40q_smoothed']:
-        ovs_file = Path(OVS_SOURCES[ovs_source])
-        # For original sources, we need to get top model per country (no rank_in_country column)
-        rank_column = None
-    else:
-        ovs_file = Path(OVS_SOURCES[ovs_source])
-        rank_column = 'rank_in_country'
+    ovs_file = Path(OVS_SOURCES[ovs_source])
     
     if not ovs_file.exists():
         raise FileNotFoundError(f"OVS results file not found: {ovs_file}")
     
     all_results = pd.read_csv(ovs_file)
-    # Don't pre-select top models here - let get_top_model_for_country handle the selection
-    # based on the lag_option parameter
+    # Final top models files already contain only the selected top model per country
     top_models = all_results
     
     # Process each country to get the appropriate model based on lag_option
@@ -283,12 +266,12 @@ def load_ovs_results(ovs_source='advanced', lag_option='ignore_lags'):
             ovs_results[country] = {
                 'model_vars': model_vars,
                 'coefficients': coefficients,
-            'adj_r2': model['adj_r2'],
-            'rank': model.get(rank_column, 1) if rank_column else 1,
-            'has_no_lags': model.get('has_no_lags', False),
-            'ovs_source': ovs_source,
-            'lag_option': lag_option
-        }
+                'adj_r2': model['adj_r2'],
+                'rank': 1,  # Final top models files contain only one model per country
+                'has_no_lags': model.get('has_no_lags', False),
+                'ovs_source': ovs_source,
+                'lag_option': lag_option
+            }
         
         # Model details available in output files
     
@@ -1095,7 +1078,7 @@ def main():
                                                          historical_forecast, country_plots_dir, combination_name)
                             
                             # Copy scenario forecast chart to centralized directory for comparison (advanced filtering + no lags or has_no_lags)
-                            if ovs_source in ['advanced', 'advanced_gcorr40q', 'advanced_gcorr40q_smoothed']:
+                            if ovs_source in ['advanced', f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q', f'advanced_gcorr{GCORR_FORECAST_QUARTERS}q_smoothed']:
                                 source_chart = country_plots_dir / f'scenario_forecast_{country}_{combination_name}.png'
                                 
                                 # Copy to appropriate centralized directory based on lag option

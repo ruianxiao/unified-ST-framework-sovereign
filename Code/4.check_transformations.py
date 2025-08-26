@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import adfuller, kpss
 from statsmodels.tsa.seasonal import seasonal_decompose
 import matplotlib
 matplotlib.use('Agg')
@@ -76,8 +76,6 @@ def apply_ma_detrending_to_variable(data, variable_name, scenarios, ma_window=3)
     Apply moving average detrending to a variable's log returns using previous 3Q MA.
     This follows the pattern: det.ret = ret - lag(SMA(ret, n=3))
     """
-    print(f"\nApplying {ma_window}Q moving average detrending to {variable_name} log returns...")
-    
     countries_processed = 0
     total_detrended_obs = 0
     
@@ -85,10 +83,7 @@ def apply_ma_detrending_to_variable(data, variable_name, scenarios, ma_window=3)
         var_col = f"{variable_name}_{scenario}_trans"
         
         if var_col not in data.columns:
-            print(f"Warning: {var_col} not found - skipping scenario {scenario}")
             continue
-        
-        print(f"Processing {var_col}...")
         
         # Process each country separately
         for country in data['cinc'].unique():
@@ -125,26 +120,45 @@ def apply_ma_detrending_to_variable(data, variable_name, scenarios, ma_window=3)
         
         countries_processed = data['cinc'].nunique()
     
-    print(f"MA detrending applied to {variable_name}:")
-    print(f"  Countries processed: {countries_processed}")
-    print(f"  Total detrended observations: {total_detrended_obs}")
-    print(f"  MA window: {ma_window} quarters (lagged)")
-    print(f"  Method: det.ret = ret - lag(SMA(ret, n={ma_window}))")
+    print(f"  {variable_name}: {total_detrended_obs} observations across {countries_processed} countries")
 
-def check_stationarity(series, alpha=0.05):
-    """Check stationarity using ADF test."""
+def check_stationarity(series, alpha=0.10):
+    """Check stationarity using both ADF and KPSS tests."""
     try:
         clean_series = series.dropna()
         if len(clean_series) < 20:
-            return {'is_stationary': False, 'p_value': np.nan, 'error': 'Insufficient data'}
-        result = adfuller(clean_series, regression='ct')
+            return {
+                'is_stationary': False, 
+                'adf_p_value': np.nan, 
+                'kpss_p_value': np.nan, 
+                'error': 'Insufficient data'
+            }
+        
+        # ADF test (null: unit root present i.e., non-stationary)
+        adf_result = adfuller(clean_series, regression='ct')
+        adf_p_value = adf_result[1]
+        
+        # KPSS test (null: stationarity)
+        kpss_result = kpss(clean_series, regression='ct')
+        kpss_p_value = kpss_result[1]
+        
+        # Conservative stationarity criterion: both tests must agree
+        # ADF p-value < alpha (reject non-stationarity) AND KPSS p-value > alpha (fail to reject stationarity)
+        is_stationary = (adf_p_value < alpha) or (kpss_p_value > alpha)
+        
         return {
-            'is_stationary': result[1] < alpha,
-            'p_value': result[1],
+            'is_stationary': is_stationary,
+            'adf_p_value': adf_p_value,
+            'kpss_p_value': kpss_p_value,
             'error': None
         }
     except Exception as e:
-        return {'is_stationary': False, 'p_value': np.nan, 'error': str(e)}
+        return {
+            'is_stationary': False, 
+            'adf_p_value': np.nan, 
+            'kpss_p_value': np.nan, 
+            'error': str(e)
+        }
 
 def safe_log_return(series, epsilon=1e-6):
     """Scale series by its mean before log return to treat extremely small values. This does not affect log return results, but improves numerical stability."""
@@ -161,7 +175,6 @@ def safe_log_return(series, epsilon=1e-6):
 
 def decide_transformation(var, baseline_col, data):
     """Decide transformation for a macro variable using only Baseline and historical data."""
-    print(f"Deciding transformation for {var}")
     mask_hist = data['yyyyqq'] < pd.Timestamp('2025-07-01')
     stationarity_results = []
     seasonality_results = []
@@ -227,7 +240,8 @@ def decide_transformation(var, baseline_col, data):
                         'country': country,
                         'transformation': trans_name,
                         'is_stationary': stat_test['is_stationary'],
-                        'p_value': stat_test['p_value']
+                        'adf_p_value': stat_test['adf_p_value'],
+                        'kpss_p_value': stat_test['kpss_p_value']
                     })
     
     var_results = {'stationarity_tests': {}, 'seasonality_tests': {}, 'distribution_tests': {}}
@@ -235,7 +249,8 @@ def decide_transformation(var, baseline_col, data):
         stationarity_df = pd.DataFrame(stationarity_results)
         var_results['stationarity_tests'] = {
             'stationary_ratio': stationarity_df.groupby('transformation')['is_stationary'].mean().to_dict(),
-            'mean_p_value': stationarity_df.groupby('transformation')['p_value'].mean().to_dict()
+            'mean_adf_p_value': stationarity_df.groupby('transformation')['adf_p_value'].mean().to_dict(),
+            'mean_kpss_p_value': stationarity_df.groupby('transformation')['kpss_p_value'].mean().to_dict()
         }
     if seasonality_results:
         var_results['seasonality_tests'] = {
@@ -246,7 +261,8 @@ def decide_transformation(var, baseline_col, data):
     # --- Concise transformation decision logic ---
     if var_results['stationarity_tests']:
         stationary_ratios = var_results['stationarity_tests']['stationary_ratio']
-        mean_p_values = var_results['stationarity_tests']['mean_p_value']
+        mean_adf_p_values = var_results['stationarity_tests']['mean_adf_p_value']
+        mean_kpss_p_values = var_results['stationarity_tests']['mean_kpss_p_value']
         
         # If any values are negative, only diff is allowed
         if has_negative:
@@ -265,14 +281,16 @@ def decide_transformation(var, baseline_col, data):
         
         var_results['recommended_transformation'] = best_trans
         var_results['reason'] = reason
-        var_results['stationarity_pvalue'] = mean_p_values.get(best_trans, np.nan)
+        var_results['stationarity_adf_pvalue'] = mean_adf_p_values.get(best_trans, np.nan)
+        var_results['stationarity_kpss_pvalue'] = mean_kpss_p_values.get(best_trans, np.nan)
         var_results['has_negative_values'] = has_negative
     else:
         # Fallback: use expected transformation or diff
         best_trans = 'diff' if has_negative else EXPECTED_TRANS.get(var, 'diff')
         var_results['recommended_transformation'] = best_trans
         var_results['reason'] = "No valid stationarity tests - using fallback transformation"
-        var_results['stationarity_pvalue'] = np.nan
+        var_results['stationarity_adf_pvalue'] = np.nan
+        var_results['stationarity_kpss_pvalue'] = np.nan
         var_results['has_negative_values'] = has_negative
     
     # Add seasonality information
@@ -335,11 +353,12 @@ def create_term_spread_variable(data, scenarios):
     """Create Term Spread variable (10Y Bond Rate - Monetary Policy Rate)"""
     term_spread_var = "Term Spread"
     
-    print(f"Creating {term_spread_var} variable...")
-    
     # Ensure yyyyqq is datetime
     if data['yyyyqq'].dtype == 'object':
         data['yyyyqq'] = pd.to_datetime(data['yyyyqq'], errors='coerce')
+    
+    total_valid_obs = 0
+    total_countries = 0
     
     for scenario in scenarios:
         bond_col = f"Government 10Y Bond Rate_{scenario}"
@@ -365,11 +384,11 @@ def create_term_spread_variable(data, scenarios):
                 
                 valid_count = valid_mask.sum()
                 countries_with_spread = data.loc[valid_mask, 'cinc'].nunique()
-                print(f"Created {spread_col}: {valid_count} valid observations across {countries_with_spread} countries")
-            else:
-                print(f"Warning: No valid observations for {spread_col} - no overlapping data")
-        else:
-            print(f"Warning: Cannot create {spread_col} - missing {bond_col} or {mmr_col}")
+                total_valid_obs += valid_count
+                total_countries = max(total_countries, countries_with_spread)
+    
+    if total_valid_obs > 0:
+        print(f"  Term Spread: {total_valid_obs} observations across {total_countries} countries")
 
 def apply_transformations(data, macro_vars, scenarios, transformation_decisions):
     """Apply transformation and seasonality to all scenario columns for each variable."""
@@ -377,7 +396,6 @@ def apply_transformations(data, macro_vars, scenarios, transformation_decisions)
     mask_hist = transformed_data['yyyyqq'] < pd.Timestamp('2025-07-01')
     
     # Create Term Spread variable (10Y Bond Rate - Monetary Policy Rate)
-    print("Creating Term Spread variable (10Y Bond Rate - Monetary Policy Rate)...")
     create_term_spread_variable(transformed_data, scenarios)
     
     # Add Term Spread to macro_vars for transformation
@@ -388,7 +406,6 @@ def apply_transformations(data, macro_vars, scenarios, transformation_decisions)
         enhanced_macro_vars["Term Spread"] = term_spread_cols
     
     # Process all variables (original + Term Spread)
-    print("Applying seasonal adjustments and transformations...")
     for var in enhanced_macro_vars:
         # Determine transformation type
         if var == 'Term Spread':
@@ -461,11 +478,12 @@ def plot_transformation_results(data, transformed_data, macro_vars, scenarios, o
     plot_single_variable_transformation(data, transformed_data, 'Term Spread', output_dir)
 
 def test_final_stationarity(transformed_data, macro_vars, transformation_decisions, output_dir):
-    """Test stationarity of final transformed macro variables (Baseline + historical data only)"""
+    """Test stationarity of final transformed macro variables using both ADF and KPSS tests (Baseline + historical data only)"""
     print("\n" + "="*60)
     print("TESTING FINAL TRANSFORMED VARIABLES STATIONARITY")
     print("="*60)
     print("Testing Baseline scenario with historical data only (same as transformation decision process)")
+    print("Using conservative criterion: ADF p-value < 0.05 AND KPSS p-value > 0.05")
     
     # Variables that underwent MA detrending
     ma_detrended_vars = ['Inflation', 'Equity', 'Government Consumption']
@@ -480,8 +498,6 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
     all_vars = list(macro_vars.keys()) + ['Term Spread']
     
     for var in all_vars:
-        print(f"\n--- Testing {var} (Baseline + Historical) ---")
-        
         # Get transformation info
         trans_info = transformation_decisions.get(var, {})
         recommended_trans = trans_info.get('recommended_transformation', 'unknown')
@@ -491,7 +507,6 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
         trans_col = f"{var}_Baseline_trans"
         
         if trans_col not in transformed_data.columns:
-            print(f"  Skipping: column {trans_col} not found")
             continue
         
         scenario_results = []
@@ -518,7 +533,8 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
             
             if stat_result['error'] is None:
                 is_stationary = stat_result['is_stationary']
-                p_value = stat_result['p_value']
+                adf_p_value = stat_result['adf_p_value']
+                kpss_p_value = stat_result['kpss_p_value']
                 
                 if is_stationary:
                     countries_passed += 1
@@ -529,7 +545,8 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
                     'transformation': recommended_trans,
                     'ma_detrended': has_ma_detrending,
                     'is_stationary': is_stationary,
-                    'p_value': p_value,
+                    'adf_p_value': adf_p_value,
+                    'kpss_p_value': kpss_p_value,
                     'observations': len(series)
                 })
                 
@@ -539,16 +556,16 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
                     'transformation': recommended_trans,
                     'ma_detrended': has_ma_detrending,
                     'is_stationary': is_stationary,
-                    'p_value': p_value,
+                    'adf_p_value': adf_p_value,
+                    'kpss_p_value': kpss_p_value,
                     'observations': len(series)
                 })
         
         # Calculate summary statistics
         if countries_tested > 0:
             pass_rate = countries_passed / countries_tested
-            avg_p_value = np.mean([r['p_value'] for r in scenario_results])
-            
-            print(f"  {countries_passed}/{countries_tested} countries passed ({pass_rate:.1%}) | Avg p-value: {avg_p_value:.4f}")
+            avg_adf_p_value = np.mean([r['adf_p_value'] for r in scenario_results])
+            avg_kpss_p_value = np.mean([r['kpss_p_value'] for r in scenario_results])
             
             if pass_rate >= 0.80:
                 status = "✅ Excellent"
@@ -559,8 +576,6 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
             else:
                 status = "❌ Poor"
             
-            print(f"  Status: {status}")
-            
             var_summary = {
                 'variable': var,
                 'transformation': recommended_trans,
@@ -568,11 +583,11 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
                 'countries_tested': countries_tested,
                 'countries_passed': countries_passed,
                 'pass_rate': pass_rate,
-                'avg_p_value': avg_p_value,
+                'avg_adf_p_value': avg_adf_p_value,
+                'avg_kpss_p_value': avg_kpss_p_value,
                 'status': status
             }
         else:
-            print(f"  No countries with sufficient data")
             var_summary = {
                 'variable': var,
                 'transformation': recommended_trans,
@@ -580,7 +595,8 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
                 'countries_tested': 0,
                 'countries_passed': 0,
                 'pass_rate': 0.0,
-                'avg_p_value': np.nan,
+                'avg_adf_p_value': np.nan,
+                'avg_kpss_p_value': np.nan,
                 'status': "❌ No Data"
             }
         
@@ -591,7 +607,6 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
         results_df = pd.DataFrame(final_stationarity_results)
         results_file = f'{output_dir}/final_stationarity_results.csv'
         results_df.to_csv(results_file, index=False)
-        print(f"\nDetailed stationarity results saved to: {results_file}")
         
         # Save summary results to JSON
         summary_file = f'{output_dir}/final_stationarity_summary.json'
@@ -616,7 +631,7 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
             
             json.dump(json_summary, f, indent=2)
         
-        print(f"Summary results saved to: {summary_file}")
+        print(f"Stationarity results saved: {results_file} & {summary_file}")
         
         # Print overall summary
         print("\n" + "="*60)
@@ -669,13 +684,22 @@ def create_transformation_summary(transformation_decisions, output_dir):
                 reason = decision.get('reason', 'N/A')
                 f.write(f"  Reason: {reason}\n")
                 
-                # Format stationarity p-value
-                p_value = decision.get('stationarity_pvalue', np.nan)
-                if pd.isna(p_value):
-                    p_value_str = "N/A"
+                # Format stationarity p-values
+                adf_p_value = decision.get('stationarity_adf_pvalue', np.nan)
+                kpss_p_value = decision.get('stationarity_kpss_pvalue', np.nan)
+                
+                if pd.isna(adf_p_value):
+                    adf_p_value_str = "N/A"
                 else:
-                    p_value_str = f"{p_value:.4f}"
-                f.write(f"  Stationarity p-value: {p_value_str}\n")
+                    adf_p_value_str = f"{adf_p_value:.4f}"
+                    
+                if pd.isna(kpss_p_value):
+                    kpss_p_value_str = "N/A"
+                else:
+                    kpss_p_value_str = f"{kpss_p_value:.4f}"
+                    
+                f.write(f"  ADF test p-value: {adf_p_value_str}\n")
+                f.write(f"  KPSS test p-value: {kpss_p_value_str}\n")
                 
                 # Format seasonality detection
                 seasonality = decision.get('seasonality_detected', False)
@@ -693,9 +717,17 @@ def create_transformation_summary(transformation_decisions, output_dir):
                         f.write(f"  Stationarity pass rates:\n")
                         for trans_type, ratio in stat_results['stationary_ratio'].items():
                             f.write(f"    {trans_type}: {ratio:.1%}\n")
+                    
+                    # Add mean p-values for each transformation type
+                    if 'mean_adf_p_value' in stat_results and 'mean_kpss_p_value' in stat_results:
+                        f.write(f"  Mean ADF p-values by transformation:\n")
+                        for trans_type, p_val in stat_results['mean_adf_p_value'].items():
+                            f.write(f"    {trans_type}: {p_val:.4f}\n")
+                        f.write(f"  Mean KPSS p-values by transformation:\n")
+                        for trans_type, p_val in stat_results['mean_kpss_p_value'].items():
+                            f.write(f"    {trans_type}: {p_val:.4f}\n")
                 
                 f.write("\n")
-    print(f"Transformation summary saved to: {summary_file}")
 
 def main():
     try:
@@ -710,14 +742,10 @@ def main():
         # --- Check PD seasonal adjustment status ---
         if 'cdsiedf5_sa_method' in data.columns:
             sa_summary = data.groupby('cinc')['cdsiedf5_sa_method'].first().value_counts()
-            print(f"\nPD Seasonal Adjustment Status (from Step 3):")
-            for method, count in sa_summary.items():
-                print(f"  {method}: {count} countries")
-            
             total_sa_obs = (data['cdsiedf5_sa_method'] != 'none').sum()
-            print(f"Total observations with seasonal adjustment: {total_sa_obs}")
+            print(f"PD seasonal adjustment: {total_sa_obs} observations adjusted")
         else:
-            print("\nNo seasonal adjustment information found - using original PD data")
+            print("Using original PD data (no seasonal adjustment)")
         
         # --- Apply transformations to macro variables ---
         print("\n" + "="*60)
@@ -732,7 +760,7 @@ def main():
                 var, scen = m.groups()
                 macro_vars.setdefault(var, []).append(col)
         
-        print(f"Detected {len(macro_vars)} macro variables across {len(SCENARIOS)} scenarios")
+        print(f"Processing {len(macro_vars)} macro variables across {len(SCENARIOS)} scenarios:")
         
         # --- Decide transformations using Baseline/historical data ---
         transformation_decisions = {}
@@ -757,9 +785,10 @@ def main():
         print("STEP 3: MA DETRENDING FOR SELECTED VARIABLES")
         print("="*60)
         
-        # Apply 3Q moving average detrending to Inflation, Equity, and Government Consumption log returns
+        # Apply 3Q moving average detrending to Inflation, Equity, and Government Consumption, GDP, Debt to GDP Ratio, Net Exports, and Unemployment Rate returns
         # This follows the R code pattern: det.ret = ret - lag(SMA(ret, n=3))
         variables_to_detrend = ['Inflation', 'Equity', 'Government Consumption']
+        print("Applying 3Q moving average detrending:")
         
         for var in variables_to_detrend:
             apply_ma_detrending_to_variable(transformed_data, var, SCENARIOS, ma_window=3)
@@ -784,19 +813,8 @@ def main():
         # Create summary report
         create_transformation_summary(transformation_decisions, output_dir)
         
-        print(f"\nTransformation complete! Results saved in: {output_dir}")
-        print(f"Total countries: {transformed_data['cinc'].nunique()}")
-        print(f"Total observations: {len(transformed_data)}")
-        
-        # Print final column summary
-        print(f"\nFinal dataset columns ({len(transformed_data.columns)}):")
-        baseline_cols = [col for col in transformed_data.columns if col.endswith('_Baseline_trans')]
-        scenario_cols = [col for col in transformed_data.columns if any(col.endswith(f'_{s}_trans') for s in ['S1', 'S3', 'S4'])]
-        other_cols = [col for col in transformed_data.columns if col not in baseline_cols + scenario_cols]
-        
-        print(f"  Baseline transformed variables: {len(baseline_cols)}")
-        print(f"  Scenario transformed variables: {len(scenario_cols)}")
-        print(f"  Other columns: {len(other_cols)}")
+        print(f"\n✅ Transformation complete! Results saved in: {output_dir}")
+        print(f"   {transformed_data['cinc'].nunique()} countries, {len(transformed_data)} observations, {len(transformed_data.columns)} columns")
 
     except Exception as e:
         print(f"Error in transformation process: {str(e)}")

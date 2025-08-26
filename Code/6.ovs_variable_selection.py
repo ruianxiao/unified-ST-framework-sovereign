@@ -4,6 +4,7 @@ OVS (Optimal Variable Selection) for Sovereign Credit Risk Models
 This script performs optimal variable selection for sovereign credit risk models with the following features:
 
 1. Historical Data Processing: Processes historical sovereign credit data with winsorization and outlier handling
+   - TEMPORARY FILTER: Excludes Canada PD data before 2009 Q1 due to data quality issues
 2. GCorr Forecast Integration: Optionally includes GCorr forecast scenarios (S1, S3, S4, baseline) for additional training data
    - GCorr quarterly PD forecasts are converted to annual PD using survival probability formula: PD_annual = 1 - (1 - PD_quarterly)^4
 3. Variable Selection: Systematically tests combinations of macro variables with different lag structures
@@ -100,9 +101,9 @@ STD_MULTIPLIER = 2.5  # Standard deviations for winsorization bounds
 APPLY_WINSORIZATION = False  # Enable/disable winsorization
 
 # --- GCORR FORECAST CONFIGURATION ---
-INCLUDE_GCORR_FORECAST = False  # Set to True to include GCorr forecast data in regression
+INCLUDE_GCORR_FORECAST = True  # Set to True to include GCorr forecast data in regression
 GCORR_FORECAST_QUARTERS = 40  # Number of forecast quarters to include (max 122)
-GCORR_USE_SMOOTHED_PD = False  # Set to True to use smoothed PD, False for unsmoothed PD
+GCORR_USE_SMOOTHED_PD = True  # Set to True to use smoothed PD, False for unsmoothed PD
 GCORR_FORECAST_DIR = Path('gcorr-research-delivery-validation/Output/gcorr_scenario_plots/annualized_data')
 
 # --- DATA PREPARATION MODE ---
@@ -190,8 +191,23 @@ def load_gcorr_forecast_data():
         
         if gcorr_data:
             combined_gcorr = pd.concat(gcorr_data, ignore_index=True)
-            print(f"GCorr annualized data loaded: {len(combined_gcorr)} records from {len(gcorr_data)} countries")
-            return combined_gcorr
+            
+            # Filter to only include the specified number of forecast quarters
+            forecast_start = pd.to_datetime('2025-07-01')
+            forecast_end = forecast_start + pd.DateOffset(months=3*GCORR_FORECAST_QUARTERS)
+            
+            # Apply quarter filtering
+            original_count = len(combined_gcorr)
+            combined_gcorr = combined_gcorr[
+                (combined_gcorr['date'] >= forecast_start) & 
+                (combined_gcorr['date'] <= forecast_end)
+            ].copy()
+            
+            filtered_count = len(combined_gcorr)
+            print(f"GCorr annualized data loaded: {original_count} total records from {len(gcorr_data)} countries")
+            print(f"Filtered to {GCORR_FORECAST_QUARTERS} quarters ({forecast_start.strftime('%Y-%m')} to {forecast_end.strftime('%Y-%m')}): {filtered_count} records")
+            
+            return combined_gcorr if not combined_gcorr.empty else None
         else:
             print("Warning: No GCorr forecast data files found")
             return None
@@ -643,11 +659,20 @@ def process_country(args):
             if (X.std() == 0).any():
                 continue
             
+            # Create weights: 2x weight for GCorr forecast data, 1x for historical data
+            # if INCLUDE_GCORR_FORECAST and 'is_forecast' in df_model.columns:
+            #     weights = df_model['is_forecast'].map({True: 2.0, False: 1.0}).fillna(1.0)
+            # else:
+            weights = None
+            
             # X = sm.add_constant(X)  # Force intercept=0
             
             # Model estimation with error handling
             try:
-                model = sm.OLS(y, X).fit()
+                if weights is not None:
+                    model = sm.WLS(y, X, weights=weights).fit()  # Weighted Least Squares
+                else:
+                    model = sm.OLS(y, X).fit()  # Regular OLS
             except:
                 continue  # Skip failed estimations
             
@@ -683,12 +708,20 @@ def process_country(args):
             mv_info = extract_macro_variables_info(X_cols, model.params.to_dict(), 
                                                  model.pvalues.to_dict(), model.bse.to_dict())
             
+            # Calculate adjusted R-squared manually for no-intercept models
+            n = len(df_model)
+            k = X.shape[1]  # Number of predictors (no intercept)
+            r2 = model.rsquared
+            
+            # For no-intercept models: adj_r2 = 1 - (1 - r2) * n / (n - k)
+            adj_r2_corrected = 1 - (1 - r2) * n / (n - k) if (n - k) > 0 else r2
+            
             # Create result with improved format
             result = {
                 'country': country,
                 'n_obs': len(df_model),
                 'r2': model.rsquared,
-                'adj_r2': model.rsquared_adj,
+                'adj_r2': adj_r2_corrected,  # Use corrected calculation
                 'AIC': model.aic,
                 'BIC': model.bic,
                 'MAE': np.mean(np.abs(model.resid)),
@@ -714,6 +747,21 @@ def main():
         print("Loading historical data...")
         data = pd.read_csv(DATA_PATH)
         data['yyyyqq'] = pd.to_datetime(data['yyyyqq'])
+        
+        # TEMPORARY FILTER: Exclude Canada PD data before 2009 Q1
+        canada_filter_date = pd.Timestamp('2009-01-01')  # 2009 Q1
+        
+        # Count records before filtering
+        canada_before = len(data[(data['cinc'] == 'CAN') & (data['yyyyqq'] < canada_filter_date)])
+        
+        # Apply filter: Keep all non-Canada data + Canada data from 2009 Q1 onwards
+        data = data[
+            (data['cinc'] != 'CAN') |  # Keep all non-Canada data
+            ((data['cinc'] == 'CAN') & (data['yyyyqq'] >= canada_filter_date))  # Keep Canada data from 2009 Q1+
+        ].copy()
+        
+        print(f"  Filtered out {canada_before} Canada records before 2009 Q1")
+        
         historical_data = data[data['yyyyqq'] < pd.Timestamp('2025-07-01')].copy()
         
         # Load GCorr forecast data if enabled
