@@ -478,7 +478,7 @@ def plot_transformation_results(data, transformed_data, macro_vars, scenarios, o
     plot_single_variable_transformation(data, transformed_data, 'Term Spread', output_dir)
 
 def test_final_stationarity(transformed_data, macro_vars, transformation_decisions, output_dir):
-    """Test stationarity of final transformed macro variables using both ADF and KPSS tests (Baseline + historical data only)"""
+    """Test stationarity of final transformed macro variables and PD variables using both ADF and KPSS tests (Baseline + historical data only)"""
     print("\n" + "="*60)
     print("TESTING FINAL TRANSFORMED VARIABLES STATIONARITY")
     print("="*60)
@@ -494,8 +494,13 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
     final_stationarity_results = []
     summary_results = {}
     
-    # Test all macro variables plus Term Spread
+    # Test all macro variables plus Term Spread and PD variables
     all_vars = list(macro_vars.keys()) + ['Term Spread']
+    
+    # Add dlnPD if it exists in the data
+    if 'dlnPD' in transformed_data.columns:
+        all_vars.append('dlnPD')
+        print("Including dlnPD in stationarity tests")
     
     for var in all_vars:
         # Get transformation info
@@ -503,8 +508,13 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
         recommended_trans = trans_info.get('recommended_transformation', 'unknown')
         has_ma_detrending = var in ma_detrended_vars
         
-        # Only test Baseline scenario
-        trans_col = f"{var}_Baseline_trans"
+        # Handle dlnPD differently (it doesn't have scenario-specific transformations)
+        if var == 'dlnPD':
+            trans_col = var  # dlnPD is already in its final form
+            recommended_trans = 'log_change'
+        else:
+            # Only test Baseline scenario for macro variables
+            trans_col = f"{var}_Baseline_trans"
         
         if trans_col not in transformed_data.columns:
             continue
@@ -638,9 +648,9 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
         print("FINAL STATIONARITY SUMMARY (Baseline + Historical)")
         print("="*60)
         
-        baseline_summary = []
+        all_summary = []
         for var, result in summary_results.items():
-            baseline_summary.append({
+            all_summary.append({
                 'variable': var,
                 'transformation': result['transformation'],
                 'ma_detrended': result['ma_detrended'],
@@ -648,18 +658,15 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
                 'status': result['status']
             })
         
-        if baseline_summary:
-            print("\nResults:")
-            for result in sorted(baseline_summary, key=lambda x: x['pass_rate'], reverse=True):
-                ma_indicator = " (MA detrended)" if result['ma_detrended'] else ""
-                print(f"  {result['variable']:20} | {result['transformation']:10} | {result['pass_rate']:5.1%} | {result['status']}{ma_indicator}")
+        print("\nStationarity Results:")
+        for result in sorted(all_summary, key=lambda x: x['pass_rate'], reverse=True):
+            ma_indicator = " (MA detrended)" if result['ma_detrended'] else ""
+            print(f"  {result['variable']:20} | {result['transformation']:10} | {result['pass_rate']:5.1%} | {result['status']}{ma_indicator}")
         
         # Count problematic variables
-        poor_vars = [r for r in baseline_summary if r['pass_rate'] < 0.70]
+        poor_vars = [r for r in all_summary if r['pass_rate'] < 0.70]
         if poor_vars:
             print(f"\n⚠️  Variables with concerning pass rates (<70%): {len(poor_vars)}")
-            for var in poor_vars:
-                print(f"    - {var['variable']} ({var['pass_rate']:.1%})")
         else:
             print(f"\n✅ All variables achieved good stationarity pass rates (≥70%)")
             
@@ -669,12 +676,24 @@ def test_final_stationarity(transformed_data, macro_vars, transformation_decisio
     else:
         print("No stationarity results to save!")
 
-def create_transformation_summary(transformation_decisions, output_dir):
+def create_transformation_summary(transformation_decisions, output_dir, pd_vars=None):
     """Save transformation decisions to a summary file"""
     summary_file = f'{output_dir}/transformation_summary.txt'
     with open(summary_file, 'w') as f:
         f.write("TRANSFORMATION SUMMARY\n")
         f.write("="*50 + "\n\n")
+        
+        # Add dlnPD information if available
+        if pd_vars and 'dlnPD' in pd_vars:
+            f.write("PD VARIABLE (tested for stationarity):\n")
+            f.write("-" * 30 + "\n")
+            f.write("Variable: dlnPD\n")
+            f.write("  Description: First difference of log PD (change in log PD)\n")
+            f.write("  Transformation: Log change (should be I(0) - stationary)\n")
+            f.write("\n")
+        
+        f.write("MACRO VARIABLES:\n")
+        f.write("-" * 30 + "\n")
         for var, decision in transformation_decisions.items():
             if isinstance(decision, dict) and 'recommended_transformation' in decision:
                 f.write(f"Variable: {var}\n")
@@ -810,8 +829,13 @@ def main():
         transformed_data.to_csv(f'{output_dir}/transformed_data.csv', index=False)
         print(f"Transformed data saved to: {output_dir}/transformed_data.csv")
         
+        # Identify dlnPD for summary
+        pd_vars_for_summary = []
+        if 'dlnPD' in transformed_data.columns:
+            pd_vars_for_summary.append('dlnPD')
+        
         # Create summary report
-        create_transformation_summary(transformation_decisions, output_dir)
+        create_transformation_summary(transformation_decisions, output_dir, pd_vars_for_summary)
         
         print(f"\n✅ Transformation complete! Results saved in: {output_dir}")
         print(f"   {transformed_data['cinc'].nunique()} countries, {len(transformed_data)} observations, {len(transformed_data.columns)} columns")
